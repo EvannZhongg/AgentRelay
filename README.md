@@ -1,3 +1,5 @@
+English | [简体中文](README.zh-CN.md)
+
 # AgentRelay
 
 AgentRelay is a small bridge between a coding agent running on a control computer and native execution environments on other computers. The first implementation uses one JSON/HTTP RPC protocol over IP for both LAN and future USB networking. It contains no agent loop or model runtime.
