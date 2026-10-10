@@ -11,7 +11,7 @@ if not exist "%~dp0AgentRelay.exe" (
 )
 
 set "BRIDGE=%~1"
-if "%BRIDGE%"=="" set "BRIDGE=http://127.0.0.1:8764"
+if "%BRIDGE%"=="" set "BRIDGE=https://localhost:8764"
 
 echo ==========================================
 echo  MCP configuration for your coding agent

@@ -34,7 +34,7 @@ func sessionCommand(args []string) error {
 		return errors.New("usage: AgentRelay session create|list|get|send|close")
 	}
 	f := flag.NewFlagSet("session", flag.ContinueOnError)
-	base := f.String("bridge", "http://127.0.0.1:8764", "bridge URL")
+	base := f.String("bridge", bridge.DefaultURL, "bridge URL")
 	id := f.String("device", "", "device ID")
 	sessionID := f.String("id", "", "session ID")
 	dir := f.String("dir", "", "workspace-relative directory for create")

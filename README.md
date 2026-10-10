@@ -2,165 +2,128 @@ English | [简体中文](README.zh-CN.md)
 
 # AgentRelay
 
-AgentRelay is a small bridge between a coding agent running on a control computer and native execution environments on other computers. The first implementation uses one JSON/HTTP RPC protocol over IP for both LAN and future USB networking. It contains no agent loop or model runtime.
-
-## First-phase architecture
+AgentRelay connects a coding agent on a control computer to native execution environments on other computers. It contains no model runtime or agent loop.
 
 ```text
-Coding Agent -- MCP stdio or CLI --> Bridge (:8764)
+Coding Agent -- MCP stdio / CLI --> Bridge (:8764, HTTPS)
+                                      ^
+                                      | Worker establishes one persistent WSS connection
+                                      | bidirectional, concurrent RPC
+                                    Worker
                                       |
-                                      | JSON/HTTP v1
-                                      v
-                                  Worker (:8765)
-                                      |
-                         workspace-scoped files and shell
+                            workspace files / native shell
 ```
 
-The shared contract is in `internal/protocol`. The Bridge keeps the registered device catalog in memory and proxies calls. The Worker exposes the same API regardless of the transport. Platform shell launch and process cleanup are isolated in `internal/worker/shell_windows.go` and `shell_other.go`; Windows PowerShell is the currently tested target, and the POSIX fallback is experimental. Windows cancellation and session close terminate the shell's process tree. A worker workspace is the boundary for all remote file paths and working directories.
-
-The current registration flow is intentionally explicit: the operator starts a Worker, then adds its HTTP URL to the Bridge. Discovery, pairing, authentication, persistence, incremental sync and multi-device scheduling are later layers over this contract.
+Workers open no inbound ports. LAN, Ethernet and future USB IP networking use the same connection protocol. The Bridge persists paired devices; connection state and Worker process stores remain in memory.
 
 ## Build
 
 ```powershell
 go test ./...
+go test -race ./...
 go vet ./...
 go build -o AgentRelay.exe ./cmd/AgentRelay
 go build -ldflags "-H=windowsgui" -o AgentRelay-mcp.exe ./cmd/AgentRelay-mcp
 ```
 
-`AgentRelay.exe` is a console program because it is driven from a terminal. `AgentRelay-mcp.exe` is built with the Windows GUI subsystem so an MCP client can start it as a child process without flashing a console window; it still speaks newline-delimited JSON-RPC over stdin and stdout.
+Windows PowerShell is the tested execution target. The POSIX shell fallback is experimental. The MCP executable uses stdio and is launched by the coding agent; the GUI subsystem prevents a flashing Windows console.
 
-## Launchers
+## First Setup
 
-`start-worker.bat`, `start-bridge.bat` and `mcp-config.bat` wrap the CLI for double-click use. They expect `AgentRelay.exe` in the same directory as the launcher, which is where the build above places it.
+On both computers run `AgentRelay setup`, or double-click `AgentRelay.exe`. Choose **controller** on the coding agent's computer. The Bridge starts and prints a pairing code.
 
-Double-clicking `AgentRelay.exe` directly is not useful: it prints usage and exits immediately, so the window vanishes. `AgentRelay-mcp.exe` is never started by hand, because an MCP client starts it over stdio.
+Choose **worker** on the target computer. Select the discovered controller, paste its pairing code, and choose a workspace folder and device alias. AgentRelay generates the device identity, saves credentials and starts the outbound connection automatically. If discovery finds no controller, enter its HTTPS URL, for example `https://192.168.1.10:8764`.
 
-- `start-worker.bat` accepts an optional workspace path; dragging a folder onto the file uses that folder as the worker workspace.
-- `start-bridge.bat` accepts an optional listen address and defaults to `:8764`.
-- `mcp-config.bat` prints the MCP configuration JSON and accepts an optional bridge URL.
+The default Bridge uses TCP 8764 and LAN discovery uses UDP 8763. Only the controller needs inbound access. Broadcast discovery is limited to the local IPv4 network; a manually entered HTTPS address also works across routed networks. Discovery results do not establish trust: the pairing code includes the Bridge certificate fingerprint, which the Worker pins automatically. No certificate files or tokens need to be configured by hand.
 
-## Windows-to-Windows smoke test
-
-On the target Windows computer:
+Pairing codes expire after five minutes and can be used once. On the controller, generate another code with:
 
 ```powershell
-AgentRelay worker serve --workspace C:\AgentRelay\workspace --listen :8765
+AgentRelay bridge pair
 ```
 
-On the control Windows computer:
+Subsequent starts need no pairing or workspace arguments:
 
 ```powershell
-AgentRelay bridge serve --listen :8764
-AgentRelay device add --worker http://TARGET_IP:8765
+# Controller
+AgentRelay bridge serve
+# Target computer
+AgentRelay worker serve
+```
+
+`start-bridge.bat` and `start-worker.bat` wrap these commands. The Worker launcher opens setup on its first run; dragging a folder onto it runs a new pairing with that workspace. `AgentRelay worker setup` explicitly pairs again. Changing the authorized workspace requires a new pairing; ordinary restarts retain the existing device ID.
+
+## Agent Access
+
+On the controller, print the MCP configuration:
+
+```powershell
+AgentRelay mcp config
+```
+
+Add the returned `mcpServers` entry to the coding agent's configuration. `mcp-config.bat` also prints it. The adapter reads the controller's saved certificate identity automatically. Both the CLI and MCP adapter must run on the controller as the same user that runs the Bridge. The controller API is restricted to loopback callers; remote computers can only pair and establish authenticated Worker connections.
+
+The tools are `device_list`, `device_exec`, `device_sync`, `device_pull`, `device_task` and `device_session`. `device_list` includes saved aliases, authorization, capabilities, workspace mappings, offline devices and their last successful registration time.
+
+## Workflows
+
+```powershell
 AgentRelay device list
-AgentRelay exec --device <device-id> "dotnet test"
-AgentRelay sync --device <device-id> --source . --remote project
-AgentRelay exec --device <device-id> --dir project "dotnet test"
+AgentRelay sync --device <id> --source C:\src\project
+AgentRelay exec --device <id> --dir C:\src\project "dotnet test"
+AgentRelay task start --device <id> --dir C:\src\project --env NODE_ENV=test --timeout-ms 60000 "npm run build"
+AgentRelay task list --device <id>
+AgentRelay task get --device <id> --id task-1
+AgentRelay task retrieve --device <id> --id task-1
+AgentRelay task cancel --device <id> --id task-2
 ```
 
-The CLI and MCP adapter support asynchronous jobs with the same lifecycle:
+Sync automatically assigns and persists a remote directory for the local project. Later syncs reuse it. Execute, task start and session create accept an absolute mapped local project directory or one of its subdirectories, as well as explicit remote workspace-relative paths. `sync --remote <path>` overrides the automatic mapping; the response includes the chosen `root`. For MCP, `device_sync` with `source_path` follows the same mapping flow; explicit `files` use the supplied remote `root`.
+
+`get` polls a task without removing it. `retrieve` returns and deletes a completed, failed or cancelled task. A still-running task returns 409; a missing, expired or already retrieved task returns 404. Wait for `finished_at` before retrieving. Failed tasks include an `error` and available execution details in `result`.
 
 ```powershell
-AgentRelay task start --device <device-id> --dir project --env NODE_ENV=test --timeout-ms 60000 "npm run build"
-AgentRelay task list --device <device-id>
-AgentRelay task get --device <device-id> --id task-1
-AgentRelay task retrieve --device <device-id> --id task-1
-AgentRelay task cancel --device <device-id> --id task-2
+AgentRelay session create --device <id> --dir C:\src\project --env APP_ENV=test
+AgentRelay session list --device <id>
+AgentRelay session send --device <id> --id session-1 --input "Write-Output 'hello'`r`n"
+AgentRelay session send --device <id> --id session-1 --input-file commands.txt
+AgentRelay session get --device <id> --id session-1
+AgentRelay session close --device <id> --id session-1
+AgentRelay pull --device <id> --out .\results <remote-root>/report.txt
 ```
 
-`get` queries a task without removing it. `retrieve` atomically returns and deletes a finished task, including failed or cancelled tasks. It returns HTTP 409 while the process is still running or being cancelled, and HTTP 404 once the record is retrieved or expired. Poll `get` until `finished_at` is present before retrieving. Failed tasks include an `error` explaining launch errors, nonzero exit codes, or timeouts; execution details remain in `result`.
+`--env KEY=VALUE` is repeatable for execution, task start and session create. Session input is sent unchanged; `--input-file -` reads stdin. `send` returns after writing; poll `get` for subsequent output. Sessions use native shell pipes, without PTY, terminal resizing or interactive password prompts. `pull` preserves remote relative paths under `--out`; without it, the result is base64 JSON.
 
-Persistent shell sessions and file retrieval are also available from the CLI:
+## Device Management
 
 ```powershell
-AgentRelay session create --device <device-id> --dir project --env APP_ENV=test
-AgentRelay session list --device <device-id>
-AgentRelay session send --device <device-id> --id session-1 --input "Write-Output 'hello'`r`n"
-AgentRelay session send --device <device-id> --id session-1 --input-file commands.txt
-AgentRelay session get --device <device-id> --id session-1
-AgentRelay session close --device <device-id> --id session-1
-AgentRelay pull --device <device-id> --out .\results project\report.txt project\build.log
+AgentRelay device rename --device <id> --name build-machine
+AgentRelay device revoke --device <id>
+AgentRelay device authorize --device <id>
+AgentRelay device remove --device <id>
 ```
 
-`--env KEY=VALUE` is repeatable for `exec`, `task start`, and `session create`. Session input is sent exactly as supplied; `--input-file -` reads stdin. `pull` preserves workspace-relative paths under `--out`; without `--out` it prints base64 JSON. It also accepts `--path` for a single file.
+Revocation is saved before the active connection is closed and blocks subsequent connections and operations. After authorization is restored, restart the Worker with `worker serve`. Removal deletes the saved device and invalidates its credentials; pair again to use it.
 
-## MCP
+## Persistence And Reconnection
 
-AgentRelay exposes a standard MCP stdio server. It negotiates the MCP protocol version during `initialize`, advertises tools through `tools/list`, and executes them through `tools/call`.
+State is stored in the current user's configuration directory under `AgentRelay` (`%APPDATA%\AgentRelay` on Windows), with atomic JSON replacement. `AGENTRELAY_HOME` can select a separate state directory for an entire CLI/MCP/Bridge installation. The Bridge stores its TLS identity, stable device IDs, credential hashes, aliases, authorization, workspace roots and local-to-remote project mappings. The Worker stores the Bridge URL, certificate fingerprint, device ID, credential and workspace. Credentials are not included in device listings.
 
-Generate a ready-to-paste configuration manually:
+After a Bridge restart, saved devices initially appear offline and Workers reconnect using their saved identities, with exponential retry delays up to 30 seconds. Reconnecting refreshes capabilities without replacing aliases or project mappings. The saved Bridge address must remain reachable; if its address changes, use Worker setup to pair at the new address.
 
-```powershell
-AgentRelay mcp config --bridge http://127.0.0.1:8764
-```
+Async tasks and shell sessions survive MCP disconnection, network reconnection and Bridge restarts while the same Worker process remains alive. Worker restarts keep the device identity and workspace but start with empty task/session stores; running processes are not reconstructed. Task metadata is currently memory-only. Synchronous execution is cancelled when its RPC connection is lost. Failed or interrupted RPC calls are never automatically replayed, because execution may have already started.
 
-The output has this shape:
+Each task/session store retains at most 128 records. Finished records expire after one hour and can be evicted to make room; active processes are never evicted. Full stores return 409. Each output stream retains up to 4 MiB and reports `output_truncated`. Windows cancellation and session close terminate the process tree; orderly Worker shutdown cancels tasks and closes sessions.
 
-```json
-{
-  "mcpServers": {
-    "agent-relay": {
-      "command": "C:\\path\\to\\AgentRelay-mcp.exe",
-      "args": [
-        "--bridge",
-        "http://127.0.0.1:8764"
-      ]
-    }
-  }
-}
-```
+## API And Scope
 
-Paste that object into the MCP JSON configuration used by the coding agent. The executable path can be overridden explicitly:
+The shared contract lives in `internal/protocol`; `internal/transport` implements multiplexed request/response/cancel messages and heartbeats over WebSocket. Worker operation handlers are invoked inside that transport and are never served on a Worker listening port.
 
-```powershell
-AgentRelay mcp config --command C:\Tools\AgentRelay-mcp.exe --name agent-relay
-```
+Bridge HTTPS endpoints:
 
-The same adapter can also be started directly:
+- `GET /v1/health`
+- `POST /v1/pair`, `GET /v1/connect` (authenticated WebSocket upgrade)
+- Local only: `POST /v1/pairings`, `GET /v1/devices`, `PATCH/DELETE /v1/devices/{id}`
+- Local only: `/v1/devices/{id}/exec`, `/files/sync`, `/files/read`, `/tasks`, `/tasks/{task-id}`, `/tasks/{task-id}/retrieve`, `/sessions`, `/sessions/{session-id}`, `/sessions/{session-id}/input`
 
-```text
-AgentRelay-mcp --bridge http://127.0.0.1:8764
-```
-
-It exposes these Agent tools:
-
-- `device_list`: probe and list all registered workers with their capabilities, including offline entries with `online: false` and the last successful `last_seen` timestamp, consistently with the HTTP/CLI catalog.
-- `device_exec`: execute a command with `working_dir`, `env`, and `timeout_ms`.
-- `device_sync`: upload a local `source_path` or explicit base64 file entries.
-- `device_pull`: read one or more remote workspace files and test results.
-- `device_task`: start, list, query, retrieve, or cancel asynchronous tasks.
-- `device_session`: create, list, poll, send input to, or close a persistent shell session. Session output is cumulative and is returned by `get`/`send`.
-
-The adapter uses newline-delimited JSON-RPC messages on stdin/stdout, as required by MCP stdio transport. Sessions use a pipe-based native shell (`powershell` on Windows) and are intended for long-running commands and incremental stdin input; they do not provide terminal resize, ANSI/PTY semantics, or interactive password prompts.
-
-Example `tools/call` arguments for sessions:
-
-```json
-{"name":"device_session","arguments":{"device_id":"<device-id>","action":"create","working_dir":"project"}}
-{"name":"device_session","arguments":{"device_id":"<device-id>","action":"send","session_id":"session-1","input":"Write-Output 'hello'\r\n"}}
-{"name":"device_session","arguments":{"device_id":"<device-id>","action":"get","session_id":"session-1"}}
-{"name":"device_session","arguments":{"device_id":"<device-id>","action":"close","session_id":"session-1"}}
-```
-
-`send` returns after writing stdin; poll `get` for subsequent output. Input is preserved exactly, including whitespace and newlines. Multiline PowerShell blocks need a final blank line. For synchronous execution, tasks, and sessions, each output stream retains up to 4 MiB; `output_truncated` reports discarded excess. Task `get` retains the record; `retrieve` returns and deletes it after execution ends. Use `device_pull` for generated files (returned as base64).
-
-Task and session records survive MCP client disconnection but are held in Worker memory and do not survive Worker restart. Each store holds at most 128 records, including active processes. Finished records expire one hour after completion; cleanup is lazy, on store access or creation (and task completion). Creating a record at capacity evicts the oldest finished records first. Active or not-yet-reaped processes are never evicted; when all slots are active, creation returns HTTP 409. Close sessions or cancel tasks and wait for process cleanup to free capacity. Session close retains its final output within this retention window.
-
-## API surface (v1)
-
-Worker endpoints:
-
-- `GET /v1/health`, `GET /v1/device`
-- `POST /v1/exec`
-- `POST /v1/files/sync`, `GET /v1/files/read?path=...`
-- `POST /v1/tasks`, `GET /v1/tasks`, `GET/DELETE /v1/tasks/{id}`
-- `POST /v1/tasks/{id}/retrieve` (return and remove a finished task)
-- `POST/GET /v1/sessions`, `GET/DELETE /v1/sessions/{id}`, `POST /v1/sessions/{id}/input`
-
-Bridge endpoints mirror Worker execution endpoints under `/v1/devices/{device-id}/...`, with `GET/POST /v1/devices` for the in-memory catalog.
-
-## Current limitations
-
-The first phase deliberately leaves authentication, pairing approval, TLS, service installation, persistent device storage, LAN discovery, incremental hashing, interactive PTY streams and multi-device orchestration out of scope. Commands are authorized by whoever can reach the Worker URL, so expose the Worker only on a trusted development network until the authorization layer is added.
+`PATCH` accepts `name`, `authorized` and `workspace_mappings` (absolute controller paths to Worker-relative directories). Worker URL registration, Worker listening flags and the previous device-ID derivation have been removed. There is no old-data migration or compatibility layer. Service installation, incremental sync, PTY and multi-device scheduling remain outside the current implementation.

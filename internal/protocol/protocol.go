@@ -10,7 +10,9 @@ type Device struct {
 	OS           string            `json:"os"`
 	OSVersion    string            `json:"os_version,omitempty"`
 	Architecture string            `json:"architecture"`
-	WorkerURL    string            `json:"worker_url,omitempty"`
+	Authorized   bool              `json:"authorized"`
+	Workspace    string            `json:"workspace"`
+	Mappings     map[string]string `json:"workspace_mappings,omitempty"`
 	Capabilities Capabilities      `json:"capabilities"`
 	Metadata     map[string]string `json:"metadata,omitempty"`
 	LastSeen     time.Time         `json:"last_seen"`
@@ -54,11 +56,13 @@ type FileEntry struct {
 }
 
 type SyncRequest struct {
-	Root  string      `json:"root,omitempty"`
-	Files []FileEntry `json:"files"`
+	SourcePath string      `json:"source_path,omitempty"`
+	Root       string      `json:"root,omitempty"`
+	Files      []FileEntry `json:"files"`
 }
 
 type SyncResponse struct {
+	Root    string   `json:"root"`
 	Written []string `json:"written"`
 	Bytes   int64    `json:"bytes"`
 }
@@ -108,4 +112,22 @@ type Session struct {
 
 type ErrorResponse struct {
 	Error string `json:"error"`
+}
+
+type Pairing struct {
+	Code      string    `json:"code"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type PairRequest struct {
+	Code   string `json:"code"`
+	Device Device `json:"device"`
+}
+
+type Credentials struct {
+	BridgeURL   string `json:"bridge_url"`
+	Fingerprint string `json:"fingerprint"`
+	DeviceID    string `json:"device_id"`
+	Token       string `json:"token"`
+	Workspace   string `json:"workspace"`
 }

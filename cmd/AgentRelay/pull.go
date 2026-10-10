@@ -15,7 +15,7 @@ import (
 
 func pullCommand(args []string) error {
 	f := flag.NewFlagSet("pull", flag.ContinueOnError)
-	base := f.String("bridge", "http://127.0.0.1:8764", "bridge URL")
+	base := f.String("bridge", bridge.DefaultURL, "bridge URL")
 	id := f.String("device", "", "device ID")
 	path := f.String("path", "", "remote workspace-relative file path")
 	out := f.String("out", "", "local destination directory; omit to return base64 JSON")

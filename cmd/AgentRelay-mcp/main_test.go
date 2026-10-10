@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +13,7 @@ import (
 
 	"AgentRelay/internal/bridge"
 	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/worker"
+	"AgentRelay/internal/testutil"
 )
 
 func TestMCPInitializeNegotiatesSupportedVersion(t *testing.T) {
@@ -62,20 +61,9 @@ func TestMCPStdioFramingAndErrors(t *testing.T) {
 }
 
 func TestMCPDevelopmentWorkflow(t *testing.T) {
-	workerServer, err := worker.New(worker.Config{Workspace: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ws := httptest.NewServer(workerServer.Handler())
-	defer ws.Close()
-	bs := httptest.NewServer(bridge.New(bridge.Config{}).Handler())
-	defer bs.Close()
-	client := bridge.NewClient(bs.URL)
+	relay := testutil.New(t, "")
+	client, device := relay.Client, relay.Device
 	ctx := context.Background()
-	device, err := client.AddDevice(ctx, ws.URL, "workflow-test")
-	if err != nil {
-		t.Fatal(err)
-	}
 	call := func(name string, args map[string]any, out any) {
 		t.Helper()
 		args["device_id"] = device.ID
@@ -184,7 +172,8 @@ func TestMCPDevelopmentWorkflow(t *testing.T) {
 	if session.Status != "closed" || session.FinishedAt == nil {
 		t.Fatalf("closed = %+v", session)
 	}
-	ws.Close()
+	relay.Peer.Close()
+	testutil.WaitOffline(t, client, device.ID)
 	call("device_list", map[string]any{}, &devices)
 	if len(devices) != 1 || devices[0].ID != device.ID || devices[0].Online || devices[0].LastSeen.IsZero() {
 		t.Fatalf("offline worker missing from catalog: %+v", devices)
@@ -229,20 +218,8 @@ func TestMCPToolDefinitionsExposeDeviceCapabilities(t *testing.T) {
 }
 
 func TestMCPDeviceExecPassesEnvAndTimeout(t *testing.T) {
-	workerServer, err := worker.New(worker.Config{Workspace: t.TempDir(), Name: "mcp-test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ws := httptest.NewServer(workerServer.Handler())
-	defer ws.Close()
-	bridgeServer := bridge.New(bridge.Config{})
-	bs := httptest.NewServer(bridgeServer.Handler())
-	defer bs.Close()
-	client := bridge.NewClient(bs.URL)
-	device, err := client.AddDevice(context.Background(), ws.URL, "mcp-test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	relay := testutil.New(t, "")
+	client, device := relay.Client, relay.Device
 	params, _ := json.Marshal(map[string]any{"name": "device_exec", "arguments": map[string]any{"device_id": device.ID, "command": "Write-Output $env:AR_MCP_TEST", "env": map[string]string{"AR_MCP_TEST": "passed"}, "timeout_ms": 5000}})
 	result, err := callTool(context.Background(), client, params)
 	if err != nil {

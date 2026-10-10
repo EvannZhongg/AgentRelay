@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +14,7 @@ import (
 
 	"AgentRelay/internal/bridge"
 	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/worker"
+	"AgentRelay/internal/testutil"
 )
 
 func captureCommand(t *testing.T, command func([]string) error, args []string) ([]byte, error) {
@@ -37,20 +36,8 @@ func captureCommand(t *testing.T, command func([]string) error, args []string) (
 func cliFixture(t *testing.T) ([]string, *bridge.Client, string, string) {
 	t.Helper()
 	root := t.TempDir()
-	s, err := worker.New(worker.Config{Workspace: root})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ws := httptest.NewServer(s.Handler())
-	t.Cleanup(ws.Close)
-	bs := httptest.NewServer(bridge.New(bridge.Config{}).Handler())
-	t.Cleanup(bs.Close)
-	c := bridge.NewClient(bs.URL)
-	d, err := c.AddDevice(context.Background(), ws.URL, "cli-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return []string{"--bridge", bs.URL, "--device", d.ID}, c, d.ID, root
+	relay := testutil.New(t, root)
+	return []string{"--bridge", relay.HTTP.URL, "--device", relay.Device.ID}, relay.Client, relay.Device.ID, root
 }
 
 func TestCLITaskWorkflow(t *testing.T) {

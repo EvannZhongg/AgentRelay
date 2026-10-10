@@ -10,22 +10,21 @@ if not exist "%~dp0AgentRelay.exe" (
   exit /b 1
 )
 
-set "WORKSPACE=%~1"
-if "%WORKSPACE%"=="" set "WORKSPACE=%~dp0workspace"
-
-if not exist "%WORKSPACE%" mkdir "%WORKSPACE%"
-
 echo ==========================================
 echo  AgentRelay worker
 echo ==========================================
-echo  workspace : %WORKSPACE%
-echo  listen    : :8765
 echo.
-echo  Tip: drag a folder onto this file to use that folder as the workspace.
+echo  First run: discover a controller and paste its pairing code.
+echo  Later runs: connect using saved configuration.
+echo  Drag a folder onto this file to pair with that workspace.
 echo  Press Ctrl+C to stop.
 echo.
 
-"%~dp0AgentRelay.exe" worker serve --workspace "%WORKSPACE%" --listen :8765
+if "%~1"=="" (
+  "%~dp0AgentRelay.exe" worker serve
+) else (
+  "%~dp0AgentRelay.exe" worker setup --workspace "%~1"
+)
 set "CODE=%ERRORLEVEL%"
 echo.
 echo worker exited with code %CODE%

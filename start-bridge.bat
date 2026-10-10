@@ -18,8 +18,8 @@ echo  AgentRelay bridge
 echo ==========================================
 echo  listen : %LISTEN%
 echo.
-echo  Register a worker from another terminal:
-echo    AgentRelay.exe device add --worker http://TARGET_IP:8765
+echo  Workers discover this controller and connect outbound.
+echo  Paste the pairing code shown below into worker setup.
 echo.
 echo  Press Ctrl+C to stop.
 echo.

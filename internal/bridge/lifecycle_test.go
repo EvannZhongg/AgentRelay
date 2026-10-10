@@ -1,0 +1,272 @@
+package bridge_test
+
+import (
+	"context"
+	"encoding/base64"
+	"errors"
+	"net"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"AgentRelay/internal/bridge"
+	"AgentRelay/internal/protocol"
+	"AgentRelay/internal/state"
+	"AgentRelay/internal/testutil"
+	"AgentRelay/internal/worker"
+)
+
+func restartBridge(t *testing.T, relay *testutil.Relay) (*bridge.Server, *httptest.Server, *bridge.Client) {
+	t.Helper()
+	address := relay.HTTP.Listener.Addr().String()
+	relay.Bridge.Close()
+	relay.HTTP.Close()
+	b, err := bridge.New(bridge.Config{StatePath: relay.StatePath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(b.Handler())
+	_ = server.Listener.Close()
+	server.Listener = listener
+	server.TLS, err = b.TLSConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	t.Cleanup(b.Close)
+	return b, server, bridge.NewClient(server.URL)
+}
+
+func TestBridgeRestartPreservesIdentityMappingsAndWorkerProcesses(t *testing.T) {
+	relay := testutil.New(t, "")
+	ctx := context.Background()
+	alias := "my-build-machine"
+	if _, err := relay.Client.UpdateDevice(ctx, relay.Device.ID, bridge.DeviceUpdate{Name: &alias}); err != nil {
+		t.Fatal(err)
+	}
+	local := t.TempDir()
+	synced, err := relay.Client.Sync(ctx, relay.Device.ID, protocol.SyncRequest{SourcePath: local, Files: []protocol.FileEntry{{Path: "sub/input.txt", ContentBase64: base64.StdEncoding.EncodeToString([]byte("persisted-map"))}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(synced.Root, "projects/") {
+		t.Fatalf("automatic root: %q", synced.Root)
+	}
+	task, err := relay.Client.StartTask(ctx, relay.Device.ID, protocol.TaskRequest{ExecRequest: protocol.ExecRequest{Command: "Start-Sleep -Milliseconds 1500; Write-Output survived"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := relay.Client.CreateSession(ctx, relay.Device.ID, protocol.SessionRequest{WorkingDir: local, Command: "$relayValue = 'retained'"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _, client := restartBridge(t, relay)
+	if b.Fingerprint() != relay.Bridge.Fingerprint() {
+		t.Fatal("bridge identity changed")
+	}
+	devices, err := client.Devices(ctx)
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("devices: %+v, %v", devices, err)
+	}
+	d := devices[0]
+	if d.ID != relay.Device.ID || d.Name != alias || !d.Authorized || d.Online || d.Workspace != relay.Credentials.Workspace || d.Mappings[local] != synced.Root {
+		t.Fatalf("restored: %+v", d)
+	}
+	var saved protocol.Credentials
+	if err := state.Load(state.Path("worker"), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.DeviceID != d.ID || saved.Token != relay.Credentials.Token {
+		t.Fatal("worker credentials not persisted")
+	}
+	peer, err := relay.Worker.Connect(ctx, saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(peer.Close)
+	result, err := client.Exec(ctx, d.ID, protocol.ExecRequest{WorkingDir: filepath.Join(local, "sub"), Command: "Get-Content input.txt"})
+	if err != nil || !strings.Contains(result.Stdout, "persisted-map") {
+		t.Fatalf("mapped execution: %+v, %v", result, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		task, err = client.GetTask(ctx, d.ID, task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.FinishedAt != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if task.Result == nil || !strings.Contains(task.Result.Stdout, "survived") {
+		t.Fatalf("task lost across bridge restart: %+v", task)
+	}
+	if _, err = client.WriteSession(ctx, d.ID, session.ID, "Write-Output $relayValue\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		session, err = client.GetSession(ctx, d.ID, session.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(session.Stdout, "retained") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(session.Stdout, "retained") {
+		t.Fatal("session state lost")
+	}
+	if _, err = client.CloseSession(ctx, d.ID, session.ID); err != nil {
+		t.Fatal(err)
+	}
+	peer.Close()
+	fresh, err := worker.New(worker.Config{Workspace: saved.Workspace, DeviceID: saved.DeviceID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err = fresh.Connect(ctx, saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(peer.Close)
+	if _, err = client.GetTask(ctx, d.ID, task.ID); err == nil {
+		t.Fatal("fresh Worker retained an old process record")
+	}
+	var current protocol.Device
+	if err = client.Do(ctx, "GET", "/v1/devices/"+d.ID+"/device", nil, &current); err != nil || current.ID != d.ID {
+		t.Fatalf("Worker restart identity: %+v, %v", current, err)
+	}
+	devices, err = client.Devices(ctx)
+	if err != nil || len(devices) != 1 || devices[0].Name != alias {
+		t.Fatalf("alias overwritten: %+v, %v", devices, err)
+	}
+}
+
+func TestPairingAuthenticationRevocationAndRemoval(t *testing.T) {
+	relay := testutil.New(t, "")
+	ctx := context.Background()
+	bad := relay.Credentials
+	bad.Token = "incorrect"
+	if _, err := relay.Worker.Connect(ctx, bad); !errors.Is(err, worker.ErrUnauthorized) {
+		t.Fatalf("invalid token accepted: %v", err)
+	}
+	code := relay.Bridge.NewPairing().Code
+	other, err := worker.New(worker.Config{Workspace: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = other.Pair(ctx, relay.HTTP.URL, code, filepath.Join(t.TempDir(), "worker.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = other.Pair(ctx, relay.HTTP.URL, code, filepath.Join(t.TempDir(), "worker.json")); err == nil {
+		t.Fatal("one-time code reused")
+	}
+	mismatch := strings.Repeat("0", 64) + "." + strings.Split(relay.Bridge.NewPairing().Code, ".")[1]
+	if _, err = other.Pair(ctx, relay.HTTP.URL, mismatch, filepath.Join(t.TempDir(), "worker.json")); err == nil {
+		t.Fatal("certificate mismatch accepted")
+	}
+	unauthorized := false
+	if _, err = relay.Client.UpdateDevice(ctx, relay.Device.ID, bridge.DeviceUpdate{Authorized: &unauthorized}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-relay.Peer.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("revoked connection left open")
+	}
+	if _, err = relay.Worker.Connect(ctx, relay.Credentials); !errors.Is(err, worker.ErrUnauthorized) {
+		t.Fatalf("revoked credentials accepted: %v", err)
+	}
+	if _, err = relay.Client.Exec(ctx, relay.Device.ID, protocol.ExecRequest{Command: "Write-Output forbidden"}); err == nil {
+		t.Fatal("revoked execution accepted")
+	}
+	_, _, client := restartBridge(t, relay)
+	devices, err := client.Devices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range devices {
+		if d.ID == relay.Device.ID && d.Authorized {
+			t.Fatal("revocation not persisted")
+		}
+	}
+	if err = client.Do(ctx, "DELETE", "/v1/devices/"+relay.Device.ID, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := bridge.New(bridge.Config{StatePath: relay.StatePath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reloaded.Close()
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest("GET", "/v1/devices", nil)
+	request.RemoteAddr = "127.0.0.1:1234"
+	reloaded.Handler().ServeHTTP(response, request)
+	if strings.Contains(response.Body.String(), relay.Device.ID) {
+		t.Fatal("removed device restored")
+	}
+}
+
+func TestWorkerReconnectsAfterBridgeRestart(t *testing.T) {
+	relay := testutil.New(t, "")
+	relay.Peer.Close()
+	testutil.WaitOffline(t, relay.Client, relay.Device.ID)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- relay.Worker.Run(ctx, relay.Credentials, nil) }()
+	waitOnline := func(client *bridge.Client) {
+		t.Helper()
+		deadline := time.Now().Add(6 * time.Second)
+		for time.Now().Before(deadline) {
+			devices, err := client.Devices(context.Background())
+			if err == nil && len(devices) == 1 && devices[0].Online {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatal("Worker did not reconnect")
+	}
+	waitOnline(relay.Client)
+	_, _, client := restartBridge(t, relay)
+	waitOnline(client)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not stop")
+	}
+}
+
+func TestControllerAPIRejectsRemoteCallersAndBrowserOrigins(t *testing.T) {
+	relay := testutil.New(t, "")
+	for _, remote := range []string{"192.168.1.50:1234", "127.0.0.1:1234"} {
+		req := httptest.NewRequest("POST", "/v1/pairings", nil)
+		req.RemoteAddr = remote
+		req.Header.Set("X-Forwarded-For", "127.0.0.1")
+		if strings.HasPrefix(remote, "127.") {
+			req.Header.Set("Origin", "https://untrusted.example")
+		}
+		out := httptest.NewRecorder()
+		relay.Bridge.Handler().ServeHTTP(out, req)
+		if out.Code != 403 {
+			t.Fatalf("remote controller access: %d", out.Code)
+		}
+	}
+	if err := relay.Client.Do(context.Background(), "POST", "/v1/devices", map[string]string{"worker_url": "http://unused:8765"}, nil); err == nil {
+		t.Fatal("legacy registration API remains enabled")
+	}
+}

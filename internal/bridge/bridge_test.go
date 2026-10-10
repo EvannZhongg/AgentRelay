@@ -1,32 +1,19 @@
-package bridge
+package bridge_test
 
 import (
 	"context"
 	"encoding/base64"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/worker"
+	"AgentRelay/internal/testutil"
 )
 
-func TestBridgeRegistersAndProxiesWorker(t *testing.T) {
-	workerServer, err := worker.New(worker.Config{Workspace: t.TempDir(), Name: "proxy-test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ws := httptest.NewServer(workerServer.Handler())
-	defer ws.Close()
-	bridgeServer := New(Config{})
-	bs := httptest.NewServer(bridgeServer.Handler())
-	defer bs.Close()
-	client := NewClient(bs.URL)
-	device, err := client.AddDevice(context.Background(), ws.URL, "proxy-test")
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestBridgePairsAndCallsOutboundWorker(t *testing.T) {
+	relay := testutil.New(t, "")
+	client, device := relay.Client, relay.Device
 	if device.ID == "" {
 		t.Fatal("device ID is empty")
 	}
@@ -94,7 +81,8 @@ func TestBridgeRegistersAndProxiesWorker(t *testing.T) {
 	if _, err := client.CloseSession(context.Background(), device.ID, session.ID); err != nil {
 		t.Fatal(err)
 	}
-	ws.Close()
+	relay.Peer.Close()
+	testutil.WaitOffline(t, client, device.ID)
 	devices, err = client.Devices(context.Background())
 	if err != nil || len(devices) != 1 || devices[0].Online {
 		t.Fatalf("offline devices = %+v, error = %v", devices, err)

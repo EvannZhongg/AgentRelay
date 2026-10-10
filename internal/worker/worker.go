@@ -2,9 +2,7 @@ package worker
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,9 +22,9 @@ import (
 )
 
 type Config struct {
-	ListenAddr string
-	Workspace  string
-	Name       string
+	Workspace string
+	Name      string
+	DeviceID  string
 }
 
 type Server struct {
@@ -37,9 +35,6 @@ type Server struct {
 }
 
 func New(cfg Config) (*Server, error) {
-	if cfg.ListenAddr == "" {
-		cfg.ListenAddr = ":8765"
-	}
 	if cfg.Workspace == "" {
 		return nil, errors.New("workspace is required")
 	}
@@ -53,16 +48,38 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Name == "" {
 		cfg.Name, _ = os.Hostname()
 	}
-	return &Server{cfg: Config{ListenAddr: cfg.ListenAddr, Workspace: root, Name: cfg.Name}, startedAt: time.Now(), tasks: newTaskStore(), sessions: newSessionStore()}, nil
+	cfg.Workspace = root
+	return &Server{cfg: cfg, startedAt: time.Now(), tasks: newTaskStore(), sessions: newSessionStore()}, nil
 }
 
 func (s *Server) Device() protocol.Device {
 	host, _ := os.Hostname()
-	sum := sha256.Sum256([]byte(host + "|" + s.cfg.Workspace))
 	return protocol.Device{
-		ID: runtime.GOOS + "-" + hex.EncodeToString(sum[:])[:16], Name: s.cfg.Name, OS: runtime.GOOS,
+		ID: s.cfg.DeviceID, Name: s.cfg.Name, OS: runtime.GOOS, Workspace: s.cfg.Workspace,
 		Architecture: runtime.GOARCH, Capabilities: protocol.Capabilities{Exec: true, Files: true, Tasks: true, Sessions: true, Shells: []string{nativeShell}, MaxPayload: 32 << 20},
 		Metadata: map[string]string{"hostname": host, "workspace": s.cfg.Workspace}, LastSeen: time.Now(), Online: true,
+	}
+}
+
+func (s *Server) Close() {
+	for _, task := range s.tasks.list() {
+		s.tasks.cancel(task.ID)
+	}
+	var closing sync.WaitGroup
+	for _, session := range s.sessions.list() {
+		closing.Add(1)
+		go func(id string) { defer closing.Done(); s.sessions.close(id) }(session.ID)
+	}
+	closing.Wait()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		s.tasks.mu.RLock()
+		running := len(s.tasks.cancels)
+		s.tasks.mu.RUnlock()
+		if running == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -79,8 +96,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/sessions/", s.sessionByID)
 	return withJSONHeaders(mux)
 }
-
-func (s *Server) ListenAndServe() error { return http.ListenAndServe(s.cfg.ListenAddr, s.Handler()) }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -184,7 +199,7 @@ func (s *Server) syncFiles(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	var result protocol.SyncResponse
+	result := protocol.SyncResponse{Root: req.Root}
 	for _, file := range req.Files {
 		path, pathErr := pathutil.ResolveUnderRoot(root, file.Path)
 		if pathErr != nil {

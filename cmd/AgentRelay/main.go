@@ -14,16 +14,20 @@ import (
 
 	"AgentRelay/internal/bridge"
 	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/worker"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		usage()
-		os.Exit(2)
+		if err := setupCommand(nil); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
 	}
 	var err error
 	switch os.Args[1] {
+	case "setup":
+		err = setupCommand(os.Args[2:])
 	case "worker":
 		err = workerCommand(os.Args[2:])
 	case "bridge":
@@ -52,43 +56,9 @@ func main() {
 	}
 }
 
-func workerCommand(args []string) error {
-	if len(args) == 0 || args[0] != "serve" {
-		return errors.New("usage: AgentRelay worker serve --workspace <dir> [--listen :8765]")
-	}
-	f := flag.NewFlagSet("worker serve", flag.ContinueOnError)
-	workspace := f.String("workspace", "", "worker workspace root")
-	listen := f.String("listen", ":8765", "listen address")
-	name := f.String("name", "", "device name")
-	if err := f.Parse(args[1:]); err != nil {
-		return err
-	}
-	if *workspace == "" {
-		return errors.New("--workspace is required")
-	}
-	s, err := worker.New(worker.Config{ListenAddr: *listen, Workspace: *workspace, Name: *name})
-	if err != nil {
-		return err
-	}
-	fmt.Printf("worker listening on %s (workspace %s)\n", *listen, *workspace)
-	return s.ListenAndServe()
-}
-func bridgeCommand(args []string) error {
-	if len(args) == 0 || args[0] != "serve" {
-		return errors.New("usage: AgentRelay bridge serve [--listen :8764]")
-	}
-	f := flag.NewFlagSet("bridge serve", flag.ContinueOnError)
-	listen := f.String("listen", ":8764", "listen address")
-	if err := f.Parse(args[1:]); err != nil {
-		return err
-	}
-	s := bridge.New(bridge.Config{ListenAddr: *listen})
-	fmt.Printf("bridge listening on %s\n", *listen)
-	return s.ListenAndServe()
-}
 func client(args []string) (*bridge.Client, context.Context, error) {
 	f := flag.NewFlagSet("client", flag.ContinueOnError)
-	base := f.String("bridge", "http://127.0.0.1:8764", "bridge URL")
+	base := f.String("bridge", bridge.DefaultURL, "bridge URL")
 	if err := f.Parse(args); err != nil {
 		return nil, nil, err
 	}
@@ -96,7 +66,7 @@ func client(args []string) (*bridge.Client, context.Context, error) {
 }
 func deviceCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: AgentRelay device add|list")
+		return errors.New("usage: AgentRelay device list|rename|authorize|revoke|remove")
 	}
 	switch args[0] {
 	case "list":
@@ -109,18 +79,29 @@ func deviceCommand(args []string) error {
 			return err
 		}
 		return printJSON(out)
-	case "add":
-		f := flag.NewFlagSet("device add", flag.ContinueOnError)
-		base := f.String("bridge", "http://127.0.0.1:8764", "bridge URL")
-		workerURL := f.String("worker", "", "worker URL")
-		name := f.String("name", "", "device name")
+	case "rename", "authorize", "revoke", "remove":
+		f := flag.NewFlagSet("device", flag.ContinueOnError)
+		base := f.String("bridge", bridge.DefaultURL, "bridge URL")
+		id := f.String("device", "", "device ID")
+		name := f.String("name", "", "device alias")
 		if err := f.Parse(args[1:]); err != nil {
 			return err
 		}
-		if *workerURL == "" {
-			return errors.New("--worker is required")
+		if *id == "" {
+			return errors.New("--device is required")
 		}
-		d, err := bridge.NewClient(*base).AddDevice(context.Background(), *workerURL, *name)
+		c := bridge.NewClient(*base)
+		if args[0] == "remove" {
+			return c.Do(context.Background(), "DELETE", "/v1/devices/"+*id, nil, nil)
+		}
+		update := bridge.DeviceUpdate{}
+		if args[0] == "rename" {
+			update.Name = name
+		} else {
+			authorized := args[0] == "authorize"
+			update.Authorized = &authorized
+		}
+		d, err := c.UpdateDevice(context.Background(), *id, update)
 		if err != nil {
 			return err
 		}
@@ -131,7 +112,7 @@ func deviceCommand(args []string) error {
 }
 func execCommand(args []string) error {
 	f := flag.NewFlagSet("exec", flag.ContinueOnError)
-	base := f.String("bridge", "http://127.0.0.1:8764", "bridge URL")
+	base := f.String("bridge", bridge.DefaultURL, "bridge URL")
 	id := f.String("device", "", "device ID")
 	dir := f.String("dir", "", "workspace-relative directory")
 	timeout := f.Int64("timeout-ms", 0, "timeout")
@@ -154,7 +135,7 @@ func taskCommand(args []string) error {
 		return errors.New("usage: AgentRelay task start|list|get|retrieve|cancel")
 	}
 	f := flag.NewFlagSet("task", flag.ContinueOnError)
-	base := f.String("bridge", "http://127.0.0.1:8764", "bridge URL")
+	base := f.String("bridge", bridge.DefaultURL, "bridge URL")
 	id := f.String("device", "", "device ID")
 	taskID := f.String("id", "", "task ID")
 	dir := f.String("dir", "", "workspace-relative directory for start")
@@ -210,10 +191,10 @@ func taskCommand(args []string) error {
 }
 func syncCommand(args []string) error {
 	f := flag.NewFlagSet("sync", flag.ContinueOnError)
-	base := f.String("bridge", "http://127.0.0.1:8764", "bridge URL")
+	base := f.String("bridge", bridge.DefaultURL, "bridge URL")
 	id := f.String("device", "", "device ID")
 	source := f.String("source", ".", "local source directory")
-	remote := f.String("remote", ".", "remote workspace-relative root")
+	remote := f.String("remote", "", "remote root (automatically mapped when omitted)")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
@@ -242,7 +223,7 @@ func syncCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	result, err := bridge.NewClient(*base).Sync(context.Background(), *id, protocol.SyncRequest{Root: *remote, Files: files})
+	result, err := bridge.NewClient(*base).Sync(context.Background(), *id, protocol.SyncRequest{SourcePath: *source, Root: *remote, Files: files})
 	if err != nil {
 		return err
 	}
@@ -263,7 +244,7 @@ func mcpCommand(args []string) error {
 		return errors.New("usage: AgentRelay mcp config [--bridge <url>] [--command <path>] [--name <server-name>]")
 	}
 	f := flag.NewFlagSet("mcp config", flag.ContinueOnError)
-	base := f.String("bridge", "http://127.0.0.1:8764", "Bridge URL")
+	base := f.String("bridge", bridge.DefaultURL, "Bridge URL")
 	command := f.String("command", defaultMCPCommand(), "MCP server executable")
 	name := f.String("name", "agent-relay", "MCP server name")
 	if err := f.Parse(args[1:]); err != nil {
@@ -302,5 +283,5 @@ func printJSON(v any) error {
 	return err
 }
 func usage() {
-	fmt.Println("AgentRelay\n\nUsage:\n  AgentRelay worker serve --workspace <dir>\n  AgentRelay bridge serve\n  AgentRelay device add --worker http://host:8765\n  AgentRelay device list\n  AgentRelay exec --device <id> [--env KEY=VALUE] [--timeout-ms N] <command>\n  AgentRelay task start|list|get|retrieve|cancel --device <id> [--id <task-id>]\n  AgentRelay sync --device <id> --source <dir>\n  AgentRelay pull --device <id> [--out <local-dir>] <remote-path>...\n  AgentRelay session create|list|get|send|close --device <id> [--id <session-id>]\n  AgentRelay mcp config [--bridge <url>]")
+	fmt.Println("AgentRelay\n\nUsage:\n  AgentRelay setup\n  AgentRelay bridge serve|pair\n  AgentRelay worker setup|serve\n  AgentRelay device list|rename|authorize|revoke|remove\n  AgentRelay exec --device <id> [--dir <local-project-or-remote-path>] <command>\n  AgentRelay task start|list|get|retrieve|cancel --device <id> [--id <task-id>]\n  AgentRelay sync --device <id> --source <dir>\n  AgentRelay pull --device <id> [--out <local-dir>] <remote-path>...\n  AgentRelay session create|list|get|send|close --device <id> [--id <session-id>]\n  AgentRelay mcp config")
 }

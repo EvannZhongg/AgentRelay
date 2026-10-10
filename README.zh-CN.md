@@ -2,165 +2,128 @@
 
 # AgentRelay
 
-AgentRelay 是一个小型桥接层，用于连接运行在**主控计算机**上的编码 Agent 与**其他计算机上的原生执行环境**。首个实现使用同一套基于 IP 的 JSON/HTTP RPC 协议，同时服务于局域网，以及将来的 USB 网络。它不包含 Agent 循环，也不包含模型运行时。
-
-## 第一阶段架构
+AgentRelay 连接主控电脑上的 Coding Agent 与其他电脑的原生执行环境，不包含模型运行时或 Agent 循环。
 
 ```text
-Coding Agent -- MCP stdio or CLI --> Bridge (:8764)
+Coding Agent -- MCP stdio / CLI --> Bridge (:8764, HTTPS)
+                                      ^
+                                      | Worker 主动建立一条持久 WSS 连接
+                                      | 双向、并发 RPC
+                                    Worker
                                       |
-                                      | JSON/HTTP v1
-                                      v
-                                  Worker (:8765)
-                                      |
-                         workspace-scoped files and shell
+                            Workspace 文件 / 原生 Shell
 ```
 
-共享契约位于 `internal/protocol`。Bridge 在内存中保存已注册设备的目录并代理调用。Worker 无论使用何种传输方式，都暴露同一套 API。平台相关的 shell 启动与进程清理被隔离在 `internal/worker/shell_windows.go` 与 `shell_other.go` 中；当前经过测试的目标是 Windows PowerShell，POSIX 回退路径属于实验性质。在 Windows 上，取消操作与会话关闭会终止 shell 的整个进程树。worker workspace 是所有远程文件路径与工作目录的边界。
-
-当前的注册流程是刻意显式的：由操作者先启动 Worker，再把它的 HTTP 地址添加到 Bridge。设备发现、配对、鉴权、持久化、增量同步与多设备调度，都是建立在该契约之上的后续层次。
+Worker 不开放任何入站端口。局域网、网线和未来的 USB IP 网络使用同一套连接协议。Bridge 持久化已配对设备；在线连接和 Worker 的进程状态保存在内存中。
 
 ## 构建
 
 ```powershell
 go test ./...
+go test -race ./...
 go vet ./...
 go build -o AgentRelay.exe ./cmd/AgentRelay
 go build -ldflags "-H=windowsgui" -o AgentRelay-mcp.exe ./cmd/AgentRelay-mcp
 ```
 
-`AgentRelay.exe` 是控制台程序，因为它由终端驱动。`AgentRelay-mcp.exe` 以 Windows GUI 子系统构建，这样 MCP 客户端把它作为子进程启动时不会闪出控制台窗口；它依然通过 stdin/stdout 使用以换行分隔的 JSON-RPC 通信。
+当前经过测试的执行平台是 Windows PowerShell，POSIX 回退仍属实验性质。MCP 程序由 Coding Agent 通过 stdio 启动；Windows GUI 子系统可避免弹出控制台窗口。
 
-## 启动器
+## 首次配置
 
-`start-worker.bat`、`start-bridge.bat` 和 `mcp-config.bat` 封装了 CLI，便于双击使用。它们要求 `AgentRelay.exe` 与启动器位于同一目录，也就是上面的构建命令所放置的位置。
+两台电脑都运行 `AgentRelay setup`，也可以直接双击 `AgentRelay.exe`。在运行 Coding Agent 的电脑选择 **controller**，Bridge 启动后显示配对码。
 
-直接双击 `AgentRelay.exe` 没有用处：它会打印用法并立即退出，因此窗口会一闪而过。`AgentRelay-mcp.exe` 从不需要手动启动，因为它由 MCP 客户端通过 stdio 启动。
+在受控电脑选择 **worker**：选择自动发现的主控端，粘贴配对码，选择 Workspace 目录和设备别名。AgentRelay 自动生成设备身份、保存凭据并建立出站连接。如果未发现主控端，可手动输入 HTTPS 地址，例如 `https://192.168.1.10:8764`。
 
-- `start-worker.bat` 接受一个可选的 workspace 路径；把文件夹拖到该文件上，就会用这个文件夹作为 worker workspace。
-- `start-bridge.bat` 接受一个可选的监听地址，默认为 `:8764`。
-- `mcp-config.bat` 打印 MCP 配置 JSON，并接受一个可选的 bridge URL。
+默认 Bridge 使用 TCP 8764，局域网发现使用 UDP 8763，只需主控电脑允许入站访问。自动发现限于本地 IPv4 广播网络；跨网段时可手动输入 HTTPS 地址。发现结果不承担身份认证：配对码包含 Bridge 证书指纹，Worker 自动固定该指纹，无需用户手工配置证书或令牌。
 
-## Windows 到 Windows 冒烟测试
-
-在目标 Windows 计算机上：
+配对码有效期为五分钟，且只能使用一次。为其他设备或过期配对生成新码，在主控电脑运行：
 
 ```powershell
-AgentRelay worker serve --workspace C:\AgentRelay\workspace --listen :8765
+AgentRelay bridge pair
 ```
 
-在主控 Windows 计算机上：
+之后启动不需要重复配对，也不需要重新填写 Workspace：
 
 ```powershell
-AgentRelay bridge serve --listen :8764
-AgentRelay device add --worker http://TARGET_IP:8765
+# 主控电脑
+AgentRelay bridge serve
+# 受控电脑
+AgentRelay worker serve
+```
+
+`start-bridge.bat` 和 `start-worker.bat` 封装上述命令。Worker 启动器首次运行会进入配置向导；拖入文件夹会以该目录进行新的配对。`AgentRelay worker setup` 可以主动重新配对。更换已授权的 Workspace 需要新配对，普通重启保留设备 ID。
+
+## 接入 Agent
+
+在主控电脑生成 MCP 配置：
+
+```powershell
+AgentRelay mcp config
+```
+
+把返回的 `mcpServers` 条目加入 Coding Agent 的配置。`mcp-config.bat` 也可生成它。适配器自动读取保存的 Bridge 证书身份。CLI 与 MCP 必须在主控电脑以启动 Bridge 的同一用户运行。主控 API 仅接受本机回环连接；其他电脑只能配对和建立经过认证的 Worker 连接。
+
+工具包括 `device_list`、`device_exec`、`device_sync`、`device_pull`、`device_task` 和 `device_session`。`device_list` 返回持久化别名、授权、能力、Workspace 映射、离线设备及最后一次成功注册的时间。
+
+## 开发流程
+
+```powershell
 AgentRelay device list
-AgentRelay exec --device <device-id> "dotnet test"
-AgentRelay sync --device <device-id> --source . --remote project
-AgentRelay exec --device <device-id> --dir project "dotnet test"
+AgentRelay sync --device <id> --source C:\src\project
+AgentRelay exec --device <id> --dir C:\src\project "dotnet test"
+AgentRelay task start --device <id> --dir C:\src\project --env NODE_ENV=test --timeout-ms 60000 "npm run build"
+AgentRelay task list --device <id>
+AgentRelay task get --device <id> --id task-1
+AgentRelay task retrieve --device <id> --id task-1
+AgentRelay task cancel --device <id> --id task-2
 ```
 
-CLI 与 MCP 适配器支持具有相同生命周期的异步任务：
+同步会自动为本地项目分配远端目录，并持久化映射，之后同步复用该目录。执行、启动任务和创建会话可直接指定已映射本地项目的绝对路径或其子目录，也可指定显式的远端 Workspace 相对路径。`sync --remote <path>` 可以覆盖自动映射；响应中的 `root` 返回最终远端目录。MCP 的 `device_sync` 使用 `source_path` 时遵循同样的自动映射流程；显式 `files` 使用指定的远端 `root`。
+
+`get` 只查询任务，`retrieve` 返回并删除已经完成、失败或取消的任务。仍在运行时返回 409，记录不存在、已过期或已取回时返回 404。等待 `finished_at` 出现后再取回；失败任务包含 `error`，已有执行结果保留在 `result` 中。
 
 ```powershell
-AgentRelay task start --device <device-id> --dir project --env NODE_ENV=test --timeout-ms 60000 "npm run build"
-AgentRelay task list --device <device-id>
-AgentRelay task get --device <device-id> --id task-1
-AgentRelay task retrieve --device <device-id> --id task-1
-AgentRelay task cancel --device <device-id> --id task-2
+AgentRelay session create --device <id> --dir C:\src\project --env APP_ENV=test
+AgentRelay session list --device <id>
+AgentRelay session send --device <id> --id session-1 --input "Write-Output 'hello'`r`n"
+AgentRelay session send --device <id> --id session-1 --input-file commands.txt
+AgentRelay session get --device <id> --id session-1
+AgentRelay session close --device <id> --id session-1
+AgentRelay pull --device <id> --out .\results <remote-root>/report.txt
 ```
 
-`get` 查询任务但不会移除它。`retrieve` 原子地返回并删除一个已完成的任务，包括失败或已取消的任务。当进程仍在运行或正在取消时，它返回 HTTP 409；记录已被取回或过期后返回 HTTP 404。请轮询 `get` 直到出现 `finished_at`，再执行 `retrieve`。失败的任务会包含一个 `error`，说明启动错误、非零退出码或超时；执行细节仍保留在 `result` 中。
+执行、启动任务和创建会话都支持重复的 `--env KEY=VALUE`。会话输入按原样发送；`--input-file -` 读取 stdin。`send` 在写入后返回，后续输出通过 `get` 查询。会话使用原生 Shell 管道，不提供 PTY、终端缩放或交互式密码提示。`pull` 在 `--out` 下保留远端相对目录，不带该参数时返回 base64 JSON。
 
-CLI 还提供持久 shell 会话与文件取回：
+## 设备管理
 
 ```powershell
-AgentRelay session create --device <device-id> --dir project --env APP_ENV=test
-AgentRelay session list --device <device-id>
-AgentRelay session send --device <device-id> --id session-1 --input "Write-Output 'hello'`r`n"
-AgentRelay session send --device <device-id> --id session-1 --input-file commands.txt
-AgentRelay session get --device <device-id> --id session-1
-AgentRelay session close --device <device-id> --id session-1
-AgentRelay pull --device <device-id> --out .\results project\report.txt project\build.log
+AgentRelay device rename --device <id> --name build-machine
+AgentRelay device revoke --device <id>
+AgentRelay device authorize --device <id>
+AgentRelay device remove --device <id>
 ```
 
-`--env KEY=VALUE` 在 `exec`、`task start` 和 `session create` 上可重复使用。会话输入按原样发送；`--input-file -` 从 stdin 读取。`pull` 会把 workspace 相对路径保留在 `--out` 之下；不带 `--out` 时打印 base64 JSON。它还接受 `--path` 用于单个文件。
+撤销授权先落盘，再关闭活动连接，并阻止后续连接和操作。恢复授权后，用 `worker serve` 重启 Worker 即可继续使用。删除设备会移除保存的记录并使凭据失效，之后需要重新配对。
 
-## MCP
+## 持久化与重连
 
-AgentRelay 暴露一个标准的 MCP stdio 服务器。它在 `initialize` 期间协商 MCP 协议版本，通过 `tools/list` 公布工具，并通过 `tools/call` 执行它们。
+状态保存在当前用户的配置目录下的 `AgentRelay` 文件夹中，Windows 默认是 `%APPDATA%\AgentRelay`，使用原子替换保存 JSON。可用 `AGENTRELAY_HOME` 为整套 CLI、MCP、Bridge 指定独立状态目录。Bridge 保存 TLS 身份、稳定设备 ID、凭据哈希、别名、授权、Workspace 根目录和本地项目到远端目录的映射。Worker 保存 Bridge 地址、证书指纹、设备 ID、凭据和 Workspace。设备列表不会泄露凭据。
 
-手动生成一份可直接粘贴的配置：
+Bridge 重启后，持久化设备先显示离线；Worker 使用原有身份自动重连，失败时指数退避，最长等待 30 秒。重连更新设备能力，但不会覆盖别名或项目映射。保存的 Bridge 地址必须仍可达；地址变化时，可通过 Worker 配置向导在新地址重新配对。
 
-```powershell
-AgentRelay mcp config --bridge http://127.0.0.1:8764
-```
+只要 Worker 进程未重启，异步任务和 Shell 会话就会在 MCP 断开、网络重连和 Bridge 重启后继续存在。Worker 重启保留设备身份和 Workspace，但任务与会话存储从空开始，不重建运行进程。任务元数据目前仅保存在内存中。同步执行在 RPC 连接断开时取消；失败或中断的 RPC 不会自动重放，以免重复执行已启动的操作。
 
-输出具有如下结构：
+任务和会话存储各最多保留 128 条记录。完成记录一小时后过期，也可为新记录提前淘汰；活跃进程不会被淘汰，容量满时返回 409。每条输出流最多保留 4 MiB，超出部分由 `output_truncated` 标记。Windows 取消任务或关闭会话会终止进程树；正常停止 Worker 会取消任务并关闭会话。
 
-```json
-{
-  "mcpServers": {
-    "agent-relay": {
-      "command": "C:\\path\\to\\AgentRelay-mcp.exe",
-      "args": [
-        "--bridge",
-        "http://127.0.0.1:8764"
-      ]
-    }
-  }
-}
-```
+## API 与范围
 
-把该对象粘贴到编码 Agent 所使用的 MCP JSON 配置中。可执行文件路径可以显式覆盖：
+共享契约位于 `internal/protocol`，`internal/transport` 在 WebSocket 上实现并发请求、响应、取消和心跳。Worker 操作处理器通过该连接内部调用，不对外监听 HTTP 端口。
 
-```powershell
-AgentRelay mcp config --command C:\Tools\AgentRelay-mcp.exe --name agent-relay
-```
+Bridge HTTPS 端点：
 
-同一适配器也可以直接启动：
+- `GET /v1/health`
+- `POST /v1/pair`、`GET /v1/connect`（经过凭据认证的 WebSocket 升级）
+- 仅本机：`POST /v1/pairings`、`GET /v1/devices`、`PATCH/DELETE /v1/devices/{id}`
+- 仅本机：`/v1/devices/{id}/exec`、`/files/sync`、`/files/read`、`/tasks`、`/tasks/{task-id}`、`/tasks/{task-id}/retrieve`、`/sessions`、`/sessions/{session-id}`、`/sessions/{session-id}/input`
 
-```text
-AgentRelay-mcp --bridge http://127.0.0.1:8764
-```
-
-它暴露以下 Agent 工具：
-
-- `device_list`：探测并列出所有已注册 worker 及其能力，包括 `online: false` 的离线条目与最后一次成功的 `last_seen` 时间戳，与 HTTP/CLI 目录保持一致。
-- `device_exec`：带 `working_dir`、`env` 和 `timeout_ms` 执行命令。
-- `device_sync`：上传本地 `source_path` 或显式的 base64 文件条目。
-- `device_pull`：读取一个或多个远程 workspace 文件与测试结果。
-- `device_task`：启动、列出、查询、取回或取消异步任务。
-- `device_session`：创建、列出、轮询、向其中发送输入或关闭一个持久 shell 会话。会话输出是累积的，由 `get`/`send` 返回。
-
-适配器按 MCP stdio 传输的要求，在 stdin/stdout 上使用以换行分隔的 JSON-RPC 消息。会话使用基于管道的原生 shell（Windows 上为 `powershell`），面向长时间运行的命令与增量 stdin 输入；它们不提供终端缩放、ANSI/PTY 语义或交互式密码提示。
-
-会话的 `tools/call` 参数示例：
-
-```json
-{"name":"device_session","arguments":{"device_id":"<device-id>","action":"create","working_dir":"project"}}
-{"name":"device_session","arguments":{"device_id":"<device-id>","action":"send","session_id":"session-1","input":"Write-Output 'hello'\r\n"}}
-{"name":"device_session","arguments":{"device_id":"<device-id>","action":"get","session_id":"session-1"}}
-{"name":"device_session","arguments":{"device_id":"<device-id>","action":"close","session_id":"session-1"}}
-```
-
-`send` 在写入 stdin 后返回；后续输出请轮询 `get`。输入按原样保留，包括空白与换行。多行 PowerShell 块需要末尾空行。对于同步执行、任务与会话，每条输出流最多保留 4 MiB；`output_truncated` 报告被丢弃的多余部分。任务的 `get` 保留记录；`retrieve` 在执行结束后返回并删除它。请使用 `device_pull` 获取生成的文件（以 base64 返回）。
-
-任务与会话记录在 MCP 客户端断开后仍然存活，但它们保存在 Worker 内存中，不会在 Worker 重启后存活。每个存储最多持有 128 条记录，包括活跃进程。已完成的记录在完成后一小时过期；清理是惰性的，发生在访问或创建存储时（以及任务完成时）。在容量已满时创建记录，会优先淘汰最旧的已完成记录。活跃或尚未回收的进程永远不会被淘汰；当所有槽位都被活跃进程占用时，创建返回 HTTP 409。请关闭会话或取消任务并等待进程清理，以释放容量。会话关闭会在该保留窗口内保留其最终输出。
-
-## API 接口面（v1）
-
-Worker 端点：
-
-- `GET /v1/health`, `GET /v1/device`
-- `POST /v1/exec`
-- `POST /v1/files/sync`, `GET /v1/files/read?path=...`
-- `POST /v1/tasks`, `GET /v1/tasks`, `GET/DELETE /v1/tasks/{id}`
-- `POST /v1/tasks/{id}/retrieve`（返回并移除一个已完成任务）
-- `POST/GET /v1/sessions`, `GET/DELETE /v1/sessions/{id}`, `POST /v1/sessions/{id}/input`
-
-Bridge 端点在 `/v1/devices/{device-id}/...` 下镜像 Worker 的执行端点，并用 `GET/POST /v1/devices` 管理内存中的设备目录。
-
-## 当前限制
-
-第一阶段刻意把鉴权、配对审批、TLS、服务安装、设备持久化存储、局域网发现、增量哈希、交互式 PTY 流与多设备编排排除在范围之外。命令由任何能访问 Worker URL 的人授权，因此在鉴权层加入之前，请只把 Worker 暴露在可信的开发网络中。
+`PATCH` 接受 `name`、`authorized` 和 `workspace_mappings`，映射键为主控端绝对路径，值为 Worker 相对目录。旧 Worker URL 注册、Worker 监听参数和旧设备 ID 推导方式已移除，不提供旧数据迁移或兼容层。服务安装、增量同步、PTY 和多设备调度尚未实现。

@@ -46,7 +46,7 @@ const (
 )
 
 func main() {
-	base := flag.String("bridge", "http://127.0.0.1:8764", "Bridge URL")
+	base := flag.String("bridge", bridge.DefaultURL, "Bridge URL")
 	flag.Parse()
 	client := bridge.NewClient(*base)
 	if err := serve(client, os.Stdin, os.Stdout); err != nil {
@@ -154,17 +154,17 @@ func toolDefinitions() []map[string]any {
 		return map[string]any{"type": "string", "description": description}
 	}
 	return []map[string]any{
-		{"name": "device_list", "description": "List all registered devices, capabilities, online status, and last_seen. Probe workers before returning; offline entries remain visible.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
+		{"name": "device_list", "description": "List paired devices, aliases, authorization, workspace mappings, capabilities and connection status. Offline entries remain visible.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
 		{"name": "device_exec", "description": "Execute a command on a device workspace and return stdout, stderr and exit status.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false,
 			"properties": map[string]any{
-				"device_id": stringProperty("Registered device ID."), "command": stringProperty("Native shell command."), "working_dir": stringProperty("Workspace-relative working directory."),
+				"device_id": stringProperty("Paired device ID."), "command": stringProperty("Native shell command."), "working_dir": stringProperty("Mapped local project directory or workspace-relative remote directory."),
 				"env": map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")}, "timeout_ms": map[string]any{"type": "integer", "minimum": 1, "description": "Execution timeout in milliseconds."},
 			}, "required": []string{"device_id", "command"},
 		}},
 		{"name": "device_sync", "description": "Synchronize files from the control workspace or explicit file entries to a device.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false, "properties": map[string]any{
-				"device_id": stringProperty("Registered device ID."), "root": stringProperty("Remote workspace-relative root."), "source_path": stringProperty("Local directory to walk and upload."),
+				"device_id": stringProperty("Paired device ID."), "root": stringProperty("Remote root; automatically mapped from source_path when omitted."), "source_path": stringProperty("Local project to upload and persist its workspace mapping."),
 				"files": map[string]any{"type": "array", "description": "Explicit files when source_path is omitted.", "items": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"path": stringProperty("Workspace-relative file path."), "content_base64": stringProperty("File content encoded as base64.")}, "required": []string{"path", "content_base64"}}},
 			}, "required": []string{"device_id"},
 		}},
@@ -173,14 +173,14 @@ func toolDefinitions() []map[string]any {
 		}},
 		{"name": "device_task", "description": "Start, list, query or cancel a task. get retains the record; retrieve returns a finished task and deletes its record, and fails while the task is running.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false, "properties": map[string]any{
-				"action": map[string]any{"type": "string", "enum": []string{"start", "list", "get", "cancel", "retrieve"}}, "device_id": stringProperty("Registered device ID."), "task_id": stringProperty("Task ID for get, cancel, or retrieve."), "command": stringProperty("Command for start."), "working_dir": stringProperty("Workspace-relative working directory."), "env": map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")}, "timeout_ms": map[string]any{"type": "integer", "minimum": 1},
+				"action": map[string]any{"type": "string", "enum": []string{"start", "list", "get", "cancel", "retrieve"}}, "device_id": stringProperty("Paired device ID."), "task_id": stringProperty("Task ID for get, cancel, or retrieve."), "command": stringProperty("Command for start."), "working_dir": stringProperty("Mapped local project or workspace-relative directory."), "env": map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")}, "timeout_ms": map[string]any{"type": "integer", "minimum": 1},
 			}, "required": []string{"device_id", "action"},
 		}},
 		{"name": "device_session", "description": "Create, list, poll, send input to, or close a persistent shell session. Output is cumulative; send returns immediately, so poll get for new output. This is a pipe-based shell, not a PTY.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false, "properties": map[string]any{
 				"action":    map[string]any{"type": "string", "enum": []string{"create", "list", "get", "send", "close"}},
 				"device_id": stringProperty("Registered device ID."), "session_id": stringProperty("Session ID for get, send, or close."),
-				"command": stringProperty("Optional initial shell command for create."), "working_dir": stringProperty("Workspace-relative working directory for create."),
+				"command": stringProperty("Optional initial shell command for create."), "working_dir": stringProperty("Mapped local project or workspace-relative directory for create."),
 				"env":   map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")},
 				"input": stringProperty("Exact stdin text for send. Include a newline to execute a shell command; multiline PowerShell blocks need a final blank line."),
 			}, "required": []string{"device_id", "action"},
@@ -241,7 +241,7 @@ func callTool(ctx context.Context, client *bridge.Client, raw json.RawMessage) (
 		if err != nil {
 			return nil, err
 		}
-		result, err := client.Sync(ctx, id, protocol.SyncRequest{Root: optionalString(call.Arguments, "root"), Files: files})
+		result, err := client.Sync(ctx, id, protocol.SyncRequest{SourcePath: optionalString(call.Arguments, "source_path"), Root: optionalString(call.Arguments, "root"), Files: files})
 		return toolJSON(result), err
 	case "device_pull":
 		id, err := requiredString(call.Arguments, "device_id")
