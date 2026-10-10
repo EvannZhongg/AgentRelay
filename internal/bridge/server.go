@@ -404,6 +404,10 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, errors.New("unknown device operation"))
 		return
 	}
+	if strings.HasPrefix(endpoint, "/v1/desktop") && (rec.Device.Capabilities.Desktop == nil || !rec.Device.Capabilities.Desktop.Supported) {
+		writeError(w, http.StatusNotImplemented, errors.New("worker does not advertise desktop capability; update the worker"))
+		return
+	}
 	data, err := io.ReadAll(io.LimitReader(r.Body, (32<<20)+1))
 	if err != nil || len(data) > 32<<20 {
 		writeError(w, 413, errors.New("RPC payload exceeds 32 MiB"))
@@ -436,6 +440,13 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, 502, err)
 		return
+	}
+	if strings.Split(endpoint, "?")[0] == "/v1/desktop/capture" && resp.Status == http.StatusOK {
+		resp.Body, err = s.captureArtifact(data, resp.Body)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.Status)
@@ -510,9 +521,9 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request, id string)
 }
 func allowed(endpoint, method string) bool {
 	switch endpoint {
-	case "/v1/health", "/v1/device", "/v1/files/read":
+	case "/v1/health", "/v1/device", "/v1/files/read", "/v1/desktop":
 		return method == "GET"
-	case "/v1/exec", "/v1/files/sync":
+	case "/v1/exec", "/v1/files/sync", "/v1/desktop/capture", "/v1/desktop/input":
 		return method == "POST"
 	case "/v1/tasks", "/v1/sessions":
 		return method == "POST" || method == "GET"

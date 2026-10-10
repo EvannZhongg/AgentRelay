@@ -17,17 +17,20 @@ import (
 	"sync/atomic"
 	"time"
 
+	"AgentRelay/internal/desktop"
 	"AgentRelay/internal/pathutil"
 	"AgentRelay/internal/protocol"
 )
 
 type Config struct {
+	Desktop   desktop.Backend
 	Workspace string
 	Name      string
 	DeviceID  string
 }
 
 type Server struct {
+	desktop   *desktop.Service
 	cfg       Config
 	startedAt time.Time
 	tasks     *taskStore
@@ -49,14 +52,24 @@ func New(cfg Config) (*Server, error) {
 		cfg.Name, _ = os.Hostname()
 	}
 	cfg.Workspace = root
-	return &Server{cfg: cfg, startedAt: time.Now(), tasks: newTaskStore(), sessions: newSessionStore()}, nil
+	d := desktop.New()
+	if cfg.Desktop != nil {
+		d = desktop.NewWithBackend(cfg.Desktop)
+	}
+	return &Server{cfg: cfg, desktop: d, startedAt: time.Now(), tasks: newTaskStore(), sessions: newSessionStore()}, nil
 }
 
 func (s *Server) Device() protocol.Device {
 	host, _ := os.Hostname()
+	capability := desktop.Capability()
+	if s.cfg.Desktop != nil {
+		if info, err := s.cfg.Desktop.Info(); err == nil {
+			capability = &info.DesktopCapability
+		}
+	}
 	return protocol.Device{
 		ID: s.cfg.DeviceID, Name: s.cfg.Name, OS: runtime.GOOS, Workspace: s.cfg.Workspace,
-		Architecture: runtime.GOARCH, Capabilities: protocol.Capabilities{Exec: true, Files: true, Tasks: true, Sessions: true, Shells: []string{nativeShell}, MaxPayload: 32 << 20},
+		Architecture: runtime.GOARCH, Capabilities: protocol.Capabilities{Desktop: capability, Exec: true, Files: true, Tasks: true, Sessions: true, Shells: []string{nativeShell}, MaxPayload: 32 << 20},
 		Metadata: map[string]string{"hostname": host, "workspace": s.cfg.Workspace}, LastSeen: time.Now(), Online: true,
 	}
 }
@@ -87,6 +100,9 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", s.health)
 	mux.HandleFunc("/v1/device", s.device)
+	mux.HandleFunc("/v1/desktop", s.desktopInfo)
+	mux.HandleFunc("/v1/desktop/capture", s.desktopCapture)
+	mux.HandleFunc("/v1/desktop/input", s.desktopInput)
 	mux.HandleFunc("/v1/exec", s.exec)
 	mux.HandleFunc("/v1/files/sync", s.syncFiles)
 	mux.HandleFunc("/v1/files/read", s.readFile)

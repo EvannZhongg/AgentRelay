@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"AgentRelay/internal/bridge"
+	"AgentRelay/internal/desktop"
 	"AgentRelay/internal/protocol"
 	"AgentRelay/internal/state"
 	"AgentRelay/internal/transport"
@@ -25,6 +26,10 @@ type Relay struct {
 }
 
 func New(t *testing.T, root string) *Relay {
+	return NewWithDesktop(t, root, nil)
+}
+
+func NewWithDesktop(t *testing.T, root string, backend desktop.Backend) *Relay {
 	t.Helper()
 	if root == "" {
 		root = t.TempDir()
@@ -43,7 +48,7 @@ func New(t *testing.T, root string) *Relay {
 	httpServer.StartTLS()
 	t.Cleanup(httpServer.Close)
 	t.Cleanup(b.Close)
-	w, err := worker.New(worker.Config{Workspace: root, Name: "test-worker"})
+	w, err := worker.New(worker.Config{Workspace: root, Name: "test-worker", Desktop: backend})
 	if err != nil {
 		t.Fatal(err)
 	}

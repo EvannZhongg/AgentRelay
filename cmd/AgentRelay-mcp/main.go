@@ -153,7 +153,7 @@ func toolDefinitions() []map[string]any {
 	stringProperty := func(description string) map[string]any {
 		return map[string]any{"type": "string", "description": description}
 	}
-	return []map[string]any{
+	return append([]map[string]any{
 		{"name": "device_list", "description": "List paired devices, aliases, authorization, workspace mappings, capabilities and connection status. Offline entries remain visible.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
 		{"name": "device_exec", "description": "Execute a command on a device workspace and return stdout, stderr and exit status.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false,
@@ -185,7 +185,7 @@ func toolDefinitions() []map[string]any {
 				"input": stringProperty("Exact stdin text for send. Include a newline to execute a shell command; multiline PowerShell blocks need a final blank line."),
 			}, "required": []string{"device_id", "action"},
 		}},
-	}
+	}, desktopToolDefinitions()...)
 }
 
 func callTool(ctx context.Context, client *bridge.Client, raw json.RawMessage) (any, error) {
@@ -213,6 +213,8 @@ func callTool(ctx context.Context, client *bridge.Client, raw json.RawMessage) (
 		}
 	}
 	switch call.Name {
+	case "device_desktop", "device_capture", "device_input":
+		return callDesktop(ctx, client, call.Name, call.Arguments)
 	case "device_list":
 		devices, err := client.Devices(ctx)
 		return toolJSON(devices), err

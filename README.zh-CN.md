@@ -11,7 +11,7 @@ Coding Agent -- MCP stdio / CLI --> Bridge (:8764, HTTPS)
                                       | 双向、并发 RPC
                                     Worker
                                       |
-                            Workspace 文件 / 原生 Shell
+                         Workspace 文件 / 原生 Shell / 桌面
 ```
 
 Worker 不开放任何入站端口。局域网、网线和未来的 USB IP 网络使用同一套连接协议。Bridge 持久化已配对设备；在线连接和 Worker 的进程状态保存在内存中。
@@ -59,7 +59,24 @@ AgentRelay mcp config
 
 把返回的 `mcpServers` 条目加入 Coding Agent 的配置。`mcp-config.bat` 也可生成它。适配器自动读取保存的 Bridge 证书身份。CLI 与 MCP 必须在主控电脑以启动 Bridge 的同一用户运行。主控 API 仅接受本机回环连接；其他电脑只能配对和建立经过认证的 Worker 连接。
 
-工具包括 `device_list`、`device_exec`、`device_sync`、`device_pull`、`device_task` 和 `device_session`。`device_list` 返回持久化别名、授权、能力、Workspace 映射、离线设备及最后一次成功注册的时间。
+工具包括 `device_list`、`device_exec`、`device_sync`、`device_pull`、`device_task`、`device_session`、`device_desktop`、`device_capture` 和 `device_input`。`device_list` 返回持久化别名、授权、能力、Workspace 映射、离线设备及最后一次成功注册的时间。
+
+## 桌面能力
+
+桌面能力通过独立的原生 Backend 接口接入：Windows 使用 Win32/GDI/SendInput，macOS 使用系统 CoreGraphics 和 `screencapture`。不依赖 RobotGo，构建无需 CGO。Worker 需要运行在用户的交互会话中；macOS 需要屏幕录制和辅助功能权限。Windows 已完成在线设备验证；macOS arm64/amd64 已通过交叉编译，仍需实机验证。
+
+`device_desktop` 返回权限和显示器信息。`device_capture` 返回标准 MCP PNG 图片、显示器元数据，以及主控端完整原图 Artifact 的绝对路径、尺寸与 SHA256。默认预览不超过 1600×1200；原图保存于 Bridge 状态目录下的 `artifacts/captures`，目前需手动清理。每张截图上限为 64M 像素和编码后 12 MiB PNG。
+
+`device_input` 支持移动、点击、拖动、滚动、组合键及 Unicode 文本。Windows 全局坐标使用物理像素，macOS 使用 point；提供 `display_id` 时为屏幕相对坐标，再提供截图返回的 `width/height` 作为 `reference_width/reference_height` 即可使用预览像素。显示器重接后索引可能变化。输入作用于整个交互桌面，超出文件 Workspace；操作串行执行，断线后不自动重放。
+
+```powershell
+AgentRelay desktop info --device <id>
+AgentRelay desktop capture --device <id> --display 0 --max-width 960 --max-height 540
+AgentRelay desktop input --device <id> --json '{"action":"click","x":300,"y":204}'
+AgentRelay desktop input --device <id> --json '{"action":"text","text":"你好"}'
+```
+
+更新 Bridge、Worker 和 MCP 程序后，重新连接 MCP 客户端以刷新工具列表。详见[Desktop 架构与接口说明](docs/desktop-capability.md)。
 
 ## 开发流程
 
@@ -121,5 +138,6 @@ Bridge HTTPS 端点：
 - `POST /v1/pair`、`GET /v1/pair/{request-id}`、`GET /v1/connect`（经过凭据认证的 WebSocket 升级）
 - 仅本机：`GET /v1/pair-requests`、`POST /v1/pair-requests/{request-id}/approve|reject`、`GET /v1/devices`、`PATCH/DELETE /v1/devices/{id}`
 - 仅本机：`/v1/devices/{id}/exec`、`/files/sync`、`/files/read`、`/tasks`、`/tasks/{task-id}`、`/tasks/{task-id}/retrieve`、`/sessions`、`/sessions/{session-id}`、`/sessions/{session-id}/input`
+- 仅本机：`GET /v1/devices/{id}/desktop`、`POST /v1/devices/{id}/desktop/capture`、`POST /v1/devices/{id}/desktop/input`
 
 `PATCH` 接受 `name`、`authorized` 和 `workspace_mappings`，映射键为主控端绝对路径，值为 Worker 相对目录。旧 Worker URL 注册、Worker 监听参数和旧设备 ID 推导方式已移除，不提供旧数据迁移或兼容层。服务安装、增量同步、PTY 和多设备调度尚未实现。

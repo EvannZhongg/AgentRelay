@@ -16,6 +16,11 @@ import (
 
 const MaxMessage = 64 << 20
 
+// Full-resolution captures can take longer than command responses on Wi-Fi.
+// Keep heartbeats compatible with an in-flight bulk frame.
+const writeTimeout = 60 * time.Second
+const readTimeout = 120 * time.Second
+
 type Request struct {
 	Method string `json:"method"`
 	Path   string `json:"path"`
@@ -49,8 +54,8 @@ type Peer struct {
 func NewPeer(conn *websocket.Conn, handler Handler) *Peer {
 	p := &Peer{conn: conn, handler: handler, pending: map[string]chan Response{}, active: map[string]context.CancelFunc{}, done: make(chan struct{}), slots: make(chan struct{}, 128)}
 	conn.SetReadLimit(MaxMessage)
-	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	conn.SetPongHandler(func(string) error { return conn.SetReadDeadline(time.Now().Add(60 * time.Second)) })
+	_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
+	conn.SetPongHandler(func(string) error { return conn.SetReadDeadline(time.Now().Add(readTimeout)) })
 	go p.read()
 	go p.heartbeat()
 	return p
@@ -70,7 +75,7 @@ func (p *Peer) Close() {
 func (p *Peer) send(f frame) error {
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
-	_ = p.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_ = p.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	err := p.conn.WriteJSON(f)
 	if err != nil {
 		p.Close()
@@ -177,7 +182,7 @@ func (p *Peer) heartbeat() {
 		case <-p.done:
 			return
 		case <-ticker.C:
-			if err := p.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+			if err := p.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeTimeout)); err != nil {
 				p.Close()
 				return
 			}

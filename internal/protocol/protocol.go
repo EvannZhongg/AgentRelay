@@ -20,12 +20,13 @@ type Device struct {
 }
 
 type Capabilities struct {
-	Exec       bool     `json:"exec"`
-	Files      bool     `json:"files"`
-	Tasks      bool     `json:"tasks"`
-	Sessions   bool     `json:"sessions"`
-	Shells     []string `json:"shells,omitempty"`
-	MaxPayload int64    `json:"max_payload_bytes,omitempty"`
+	Desktop    *DesktopCapability `json:"desktop,omitempty"`
+	Exec       bool               `json:"exec"`
+	Files      bool               `json:"files"`
+	Tasks      bool               `json:"tasks"`
+	Sessions   bool               `json:"sessions"`
+	Shells     []string           `json:"shells,omitempty"`
+	MaxPayload int64              `json:"max_payload_bytes,omitempty"`
 }
 
 type Health struct {

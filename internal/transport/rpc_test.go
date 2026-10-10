@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"github.com/gorilla/websocket"
@@ -11,6 +12,50 @@ import (
 	"testing"
 	"time"
 )
+
+// A slow receiver must not disconnect a bulk frame at the former ten-second
+// deadline. Use a frame larger than socket buffers to exercise the actual write.
+func TestBulkFrameWithSlowReceiver(t *testing.T) {
+	accepted := make(chan *Peer, 1)
+	receiverReady := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		select {
+		case <-time.After(11 * time.Second):
+		case <-receiverReady:
+		}
+		peer := NewPeer(conn, func(ctx context.Context, req Request) Response {
+			return Response{Status: 200, Body: req.Body}
+		})
+		accepted <- peer
+		<-peer.Done()
+	}))
+	t.Cleanup(server.Close)
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := NewPeer(conn, nil)
+	t.Cleanup(peer.Close)
+	defer func() {
+		close(receiverReady)
+		(<-accepted).Close()
+	}()
+	data := bytes.Repeat([]byte{0x5a}, 12<<20)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := peer.Call(ctx, Request{Method: "POST", Path: "/bulk", Body: data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Status != 200 || !bytes.Equal(data, out.Body) {
+		t.Fatal("bulk frame corrupted")
+	}
+}
 
 func peerPair(t *testing.T, left, right Handler) (*Peer, *Peer) {
 	t.Helper()

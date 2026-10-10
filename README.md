@@ -11,7 +11,7 @@ Coding Agent -- MCP stdio / CLI --> Bridge (:8764, HTTPS)
                                       | bidirectional, concurrent RPC
                                     Worker
                                       |
-                            workspace files / native shell
+                         workspace files / native shell / desktop
 ```
 
 Workers open no inbound ports. LAN, Ethernet and future USB IP networking use the same connection protocol. The Bridge persists paired devices; connection state and Worker process stores remain in memory.
@@ -59,7 +59,24 @@ AgentRelay mcp config
 
 Add the returned `mcpServers` entry to the coding agent's configuration. `mcp-config.bat` also prints it. The adapter reads the controller's saved certificate identity automatically. Both the CLI and MCP adapter must run on the controller as the same user that runs the Bridge. The controller API is restricted to loopback callers; remote computers can only pair and establish authenticated Worker connections.
 
-The tools are `device_list`, `device_exec`, `device_sync`, `device_pull`, `device_task` and `device_session`. `device_list` includes saved aliases, authorization, capabilities, workspace mappings, offline devices and their last successful registration time.
+The tools are `device_list`, `device_exec`, `device_sync`, `device_pull`, `device_task`, `device_session`, `device_desktop`, `device_capture` and `device_input`. `device_list` includes saved aliases, authorization, capabilities, workspace mappings, offline devices and their last successful registration time.
+
+## Desktop Access
+
+Desktop access uses an independent native backend interface: Win32/GDI/SendInput on Windows, and system CoreGraphics plus `screencapture` on macOS. It has no RobotGo dependency and builds without CGO. Run the Worker in an interactive user session; on macOS grant Screen Recording and Accessibility permissions. Windows has been tested on a connected device; macOS arm64/amd64 builds have been checked, with runtime testing still required.
+
+`device_desktop` reports permissions and monitors. `device_capture` returns a standard MCP PNG image, monitor metadata and a controller-local full-resolution Artifact path with dimensions and SHA256. Previews default to at most 1600×1200; original PNGs are saved under the Bridge state directory's `artifacts/captures` and require manual cleanup. Limits: 64M pixels and 12 MiB encoded PNG per capture.
+
+`device_input` supports move, click, drag, scroll, key combinations and Unicode text. Global coordinates use physical pixels on Windows and points on macOS. Supply `display_id` for display-relative coordinates, and the capture's `width/height` as `reference_width/reference_height` to use preview pixels. Display indices may change after reconnecting monitors. Inputs affect the interactive desktop beyond the file workspace, are serialized and never replayed on reconnection.
+
+```powershell
+AgentRelay desktop info --device <id>
+AgentRelay desktop capture --device <id> --display 0 --max-width 960 --max-height 540
+AgentRelay desktop input --device <id> --json '{"action":"click","x":300,"y":204}'
+AgentRelay desktop input --device <id> --json '{"action":"text","text":"Hello"}'
+```
+
+Update Bridge, Worker and the MCP executable, then reconnect the MCP client to refresh its tool list. See [Desktop architecture and contract](docs/desktop-capability.md) for details.
 
 ## Workflows
 
@@ -121,5 +138,6 @@ Bridge HTTPS endpoints:
 - `POST /v1/pair`, `GET /v1/pair/{request-id}`, `GET /v1/connect` (authenticated WebSocket upgrade)
 - Local only: `GET /v1/pair-requests`, `POST /v1/pair-requests/{request-id}/approve|reject`, `GET /v1/devices`, `PATCH/DELETE /v1/devices/{id}`
 - Local only: `/v1/devices/{id}/exec`, `/files/sync`, `/files/read`, `/tasks`, `/tasks/{task-id}`, `/tasks/{task-id}/retrieve`, `/sessions`, `/sessions/{session-id}`, `/sessions/{session-id}/input`
+- Local only: `GET /v1/devices/{id}/desktop`, `POST /v1/devices/{id}/desktop/capture`, `POST /v1/devices/{id}/desktop/input`
 
 `PATCH` accepts `name`, `authorized` and `workspace_mappings` (absolute controller paths to Worker-relative directories). Worker URL registration, Worker listening flags and the previous device-ID derivation have been removed. There is no old-data migration or compatibility layer. Service installation, incremental sync, PTY and multi-device scheduling remain outside the current implementation.
