@@ -30,17 +30,13 @@ Windows PowerShell is the tested execution target. The POSIX shell fallback is e
 
 ## First Setup
 
-On both computers run `AgentRelay setup`, or double-click `AgentRelay.exe`. Choose **controller** on the coding agent's computer. The Bridge starts and prints a pairing code.
+On both computers run `AgentRelay setup`, or double-click `AgentRelay.exe`. Choose **controller** on the coding agent's computer. The Bridge starts and waits for connection requests.
 
-Choose **worker** on the target computer. Select the discovered controller, paste its pairing code, and choose a workspace folder and device alias. AgentRelay generates the device identity, saves credentials and starts the outbound connection automatically. If discovery finds no controller, enter its HTTPS URL, for example `https://192.168.1.10:8764`.
+Choose **worker** on the target computer. Select the discovered controller, then choose a workspace folder and device alias. The Worker sends a connection request and shows a verification number. The controller shows the same number with the device name; approve or reject it there. After approval AgentRelay generates the device identity, saves credentials and starts the outbound connection automatically.
 
-The default Bridge uses TCP 8764 and LAN discovery uses UDP 8763. Only the controller needs inbound access. Broadcast discovery is limited to the local IPv4 network; a manually entered HTTPS address also works across routed networks. Discovery results do not establish trust: the pairing code includes the Bridge certificate fingerprint, which the Worker pins automatically. No certificate files or tokens need to be configured by hand.
+The default Bridge uses TCP 8764 and LAN discovery uses UDP 8763. Only the controller needs inbound access. The Worker must select a discovered controller so it can pin the advertised certificate fingerprint before the first HTTPS request. A manually entered URL without a discovered fingerprint is rejected; this prevents an unverified first request from establishing trust. The verification number is random for each request and is only a visual reference; users never copy certificate strings, pairing codes or tokens.
 
-Pairing codes expire after five minutes and can be used once. On the controller, generate another code with:
-
-```powershell
-AgentRelay bridge pair
-```
+Pending requests expire after five minutes. A device is created and credentials are issued only after the controller approves the request.
 
 Subsequent starts need no pairing or workspace arguments:
 
@@ -122,8 +118,8 @@ The shared contract lives in `internal/protocol`; `internal/transport` implement
 Bridge HTTPS endpoints:
 
 - `GET /v1/health`
-- `POST /v1/pair`, `GET /v1/connect` (authenticated WebSocket upgrade)
-- Local only: `POST /v1/pairings`, `GET /v1/devices`, `PATCH/DELETE /v1/devices/{id}`
+- `POST /v1/pair`, `GET /v1/pair/{request-id}`, `GET /v1/connect` (authenticated WebSocket upgrade)
+- Local only: `GET /v1/pair-requests`, `POST /v1/pair-requests/{request-id}/approve|reject`, `GET /v1/devices`, `PATCH/DELETE /v1/devices/{id}`
 - Local only: `/v1/devices/{id}/exec`, `/files/sync`, `/files/read`, `/tasks`, `/tasks/{task-id}`, `/tasks/{task-id}/retrieve`, `/sessions`, `/sessions/{session-id}`, `/sessions/{session-id}/input`
 
 `PATCH` accepts `name`, `authorized` and `workspace_mappings` (absolute controller paths to Worker-relative directories). Worker URL registration, Worker listening flags and the previous device-ID derivation have been removed. There is no old-data migration or compatibility layer. Service installation, incremental sync, PTY and multi-device scheduling remain outside the current implementation.

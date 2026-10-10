@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"AgentRelay/internal/bridge"
 	"AgentRelay/internal/discovery"
@@ -66,7 +67,7 @@ func workerCommand(args []string) error {
 		return errors.New("usage: AgentRelay worker setup|serve")
 	}
 	f := flag.NewFlagSet("worker", flag.ContinueOnError)
-	base := f.String("bridge", "", "controller URL (discovered when omitted)")
+	base := f.String("bridge", "", "controller URL (must come from discovery)")
 	workspace := f.String("workspace", "", "workspace for first setup")
 	if err := f.Parse(args[1:]); err != nil {
 		return err
@@ -91,6 +92,7 @@ func workerCommand(args []string) error {
 }
 func setupWorker(input *bufio.Reader, base, workspace string) error {
 	ctx := context.Background()
+	fingerprint := ""
 	if base == "" {
 		fmt.Println("Searching for controllers...")
 		found, err := discovery.Discover(ctx)
@@ -101,31 +103,23 @@ func setupWorker(input *bufio.Reader, base, workspace string) error {
 			for i, item := range found {
 				fmt.Printf("%d. %s (%s)\n", i+1, item.Name, item.URL)
 			}
-			selection, err := prompt(input, "Controller number, or URL", "1")
+			selection, err := prompt(input, "Controller number", "1")
 			if err != nil {
 				return err
 			}
 			index, err := strconv.Atoi(selection)
-			if err == nil {
-				if index < 1 || index > len(found) {
-					return errors.New("invalid controller number")
-				}
-				base = found[index-1].URL
-			} else {
-				base = selection
+			if err != nil || index < 1 || index > len(found) {
+				return errors.New("select a discovered controller; manual URLs cannot establish certificate trust")
 			}
+			base = found[index-1].URL
+			fingerprint = found[index-1].Fingerprint
 		}
 		if base == "" {
-			var err error
-			base, err = prompt(input, "Controller URL", "")
-			if err != nil {
-				return err
-			}
+			return errors.New("no controller with a trusted certificate was discovered")
 		}
 	}
-	code, err := prompt(input, "Pairing code shown on the controller", "")
-	if err != nil {
-		return err
+	if fingerprint == "" {
+		return errors.New("controller certificate fingerprint is required; select a controller discovered on the local network")
 	}
 	if workspace == "" {
 		home, err := os.UserHomeDir()
@@ -146,7 +140,10 @@ func setupWorker(input *bufio.Reader, base, workspace string) error {
 	if err != nil {
 		return err
 	}
-	credentials, err := s.Pair(ctx, base, code, state.Path("worker"))
+	credentials, err := s.Pair(ctx, base, fingerprint, state.Path("worker"), func(request protocol.PairingRequest) {
+		fmt.Printf("Pairing request sent. Approve device %s on the controller; verification number: %s\n", request.Device.Name, request.Verification)
+		fmt.Println("Waiting for controller approval...")
+	})
 	if err != nil {
 		return err
 	}
@@ -170,7 +167,7 @@ func runWorker(credentials protocol.Credentials) error {
 }
 func bridgeCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: AgentRelay bridge serve|pair")
+		return errors.New("usage: AgentRelay bridge serve")
 	}
 	f := flag.NewFlagSet("bridge", flag.ContinueOnError)
 	listen := f.String("listen", ":8764", "controller listen address")
@@ -178,16 +175,8 @@ func bridgeCommand(args []string) error {
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
-	if args[0] == "pair" {
-		pairing, err := bridge.NewClient(*base).Pairing(context.Background())
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Pairing code (one use, valid for five minutes):\n%s\n", pairing.Code)
-		return nil
-	}
 	if args[0] != "serve" {
-		return errors.New("usage: AgentRelay bridge serve|pair")
+		return errors.New("usage: AgentRelay bridge serve")
 	}
 	s, err := bridge.New(bridge.Config{ListenAddr: *listen})
 	if err != nil {
@@ -205,6 +194,9 @@ func bridgeCommand(args []string) error {
 	if port < 1 || port > 65535 {
 		return errors.New("listen port must be between 1 and 65535")
 	}
+	if *base == bridge.DefaultURL {
+		*base = "https://localhost:" + strconv.Itoa(port)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	host, _ := os.Hostname()
@@ -214,7 +206,85 @@ func bridgeCommand(args []string) error {
 		}
 	}()
 	fmt.Printf("Controller listening on %s. Ctrl+C to stop.\n", *listen)
-	fmt.Printf("Pairing code (one use, valid for five minutes):\n%s\n", s.NewPairing().Code)
-	fmt.Println("For another device or an expired code: AgentRelay bridge pair")
-	return s.ListenAndServe()
+	fmt.Println("Waiting for Worker pairing requests; each request will show a verification number for approval.")
+	go func() {
+		if err := pairingApprovalLoop(ctx, *base); err != nil && !errors.Is(err, context.Canceled) {
+			fmt.Fprintln(os.Stderr, "Pairing approval stopped:", err)
+		}
+	}()
+	err = s.ListenAndServe()
+	cancel()
+	return err
+}
+
+func pairingApprovalLoop(ctx context.Context, base string) error {
+	client := bridge.NewClient(base)
+	input := bufio.NewReader(os.Stdin)
+	seen := map[string]time.Time{}
+	for {
+		requests, err := client.PairRequests(ctx)
+		if err == nil {
+			active := make(map[string]struct{}, len(requests))
+			for _, request := range requests {
+				active[request.ID] = struct{}{}
+				if _, ok := seen[request.ID]; ok {
+					continue
+				}
+				fmt.Printf("\n%s requests a connection\nVerification number: %s\nApprove with A or reject with R: ", request.Device.Name, request.Verification)
+				line, readErr := readApprovalLine(ctx, input)
+				if readErr != nil {
+					if ctx.Err() != nil {
+						return ctx.Err()
+					}
+					return fmt.Errorf("interactive approval unavailable: %w; use the local pairing approval API for non-interactive operation", readErr)
+				}
+				approve := strings.EqualFold(strings.TrimSpace(line), "a")
+				if _, decideErr := client.DecidePairing(ctx, request.ID, approve); decideErr != nil {
+					fmt.Fprintln(os.Stderr, "Pairing request handling failed:", decideErr)
+					continue
+				}
+				seen[request.ID] = time.Now()
+			}
+			for id := range seen {
+				if _, ok := active[id]; !ok {
+					delete(seen, id)
+				}
+			}
+			for len(seen) > 1024 {
+				var oldestID string
+				var oldest time.Time
+				for id, at := range seen {
+					if oldestID == "" || at.Before(oldest) {
+						oldestID, oldest = id, at
+					}
+				}
+				delete(seen, oldestID)
+			}
+		}
+		timer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func readApprovalLine(ctx context.Context, input *bufio.Reader) (string, error) {
+	type result struct {
+		line string
+		err  error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		line, err := input.ReadString('\n')
+		resultCh <- result{line: line, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case out := <-resultCh:
+		return out.line, out.err
+	}
 }

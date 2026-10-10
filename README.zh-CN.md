@@ -30,17 +30,13 @@ go build -ldflags "-H=windowsgui" -o AgentRelay-mcp.exe ./cmd/AgentRelay-mcp
 
 ## 首次配置
 
-两台电脑都运行 `AgentRelay setup`，也可以直接双击 `AgentRelay.exe`。在运行 Coding Agent 的电脑选择 **controller**，Bridge 启动后显示配对码。
+两台电脑都运行 `AgentRelay setup`，也可以直接双击 `AgentRelay.exe`。在运行 Coding Agent 的电脑选择 **controller**，Bridge 启动后等待连接请求。
 
-在受控电脑选择 **worker**：选择自动发现的主控端，粘贴配对码，选择 Workspace 目录和设备别名。AgentRelay 自动生成设备身份、保存凭据并建立出站连接。如果未发现主控端，可手动输入 HTTPS 地址，例如 `https://192.168.1.10:8764`。
+在受控电脑选择 **worker**：选择自动发现的主控端，选择 Workspace 目录和设备别名。Worker 发起连接请求并显示验证数字；主控端会显示设备名称和相同数字，用户在主控端批准或拒绝。批准后 AgentRelay 自动生成设备身份、保存凭据并建立出站连接。
 
-默认 Bridge 使用 TCP 8764，局域网发现使用 UDP 8763，只需主控电脑允许入站访问。自动发现限于本地 IPv4 广播网络；跨网段时可手动输入 HTTPS 地址。发现结果不承担身份认证：配对码包含 Bridge 证书指纹，Worker 自动固定该指纹，无需用户手工配置证书或令牌。
+默认 Bridge 使用 TCP 8764，局域网发现使用 UDP 8763，只需主控电脑允许入站访问。Worker 必须选择自动发现的主控端，以便在首次 HTTPS 请求前固定发现结果中的证书指纹。没有已知发现指纹时手动输入的 URL 会被拒绝，避免通过未校验证书的首次请求建立信任。验证数字会为每次请求随机生成，只用于目视核对；用户不需要复制证书字符串、配对码或令牌。
 
-配对码有效期为五分钟，且只能使用一次。为其他设备或过期配对生成新码，在主控电脑运行：
-
-```powershell
-AgentRelay bridge pair
-```
+待审批请求五分钟后过期。只有主控批准后才会创建设备并发放凭据。
 
 之后启动不需要重复配对，也不需要重新填写 Workspace：
 
@@ -122,8 +118,8 @@ Bridge 重启后，持久化设备先显示离线；Worker 使用原有身份自
 Bridge HTTPS 端点：
 
 - `GET /v1/health`
-- `POST /v1/pair`、`GET /v1/connect`（经过凭据认证的 WebSocket 升级）
-- 仅本机：`POST /v1/pairings`、`GET /v1/devices`、`PATCH/DELETE /v1/devices/{id}`
+- `POST /v1/pair`、`GET /v1/pair/{request-id}`、`GET /v1/connect`（经过凭据认证的 WebSocket 升级）
+- 仅本机：`GET /v1/pair-requests`、`POST /v1/pair-requests/{request-id}/approve|reject`、`GET /v1/devices`、`PATCH/DELETE /v1/devices/{id}`
 - 仅本机：`/v1/devices/{id}/exec`、`/files/sync`、`/files/read`、`/tasks`、`/tasks/{task-id}`、`/tasks/{task-id}/retrieve`、`/sessions`、`/sessions/{session-id}`、`/sessions/{session-id}/input`
 
 `PATCH` 接受 `name`、`authorized` 和 `workspace_mappings`，映射键为主控端绝对路径，值为 Worker 相对目录。旧 Worker URL 注册、Worker 监听参数和旧设备 ID 推导方式已移除，不提供旧数据迁移或兼容层。服务安装、增量同步、PTY 和多设备调度尚未实现。

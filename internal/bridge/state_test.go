@@ -16,13 +16,76 @@ func TestExpiredPairingCannotCreateDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code := s.NewPairing().Code
-	s.pairings[code] = time.Now().Add(-time.Second)
-	data, _ := json.Marshal(protocol.PairRequest{Code: code, Device: protocol.Device{Name: "expired", Workspace: "workspace"}})
+	data, _ := json.Marshal(protocol.PairRequest{Device: protocol.Device{Name: "expired", Workspace: "workspace"}})
 	out := httptest.NewRecorder()
 	s.Handler().ServeHTTP(out, httptest.NewRequest("POST", "/v1/pair", bytes.NewReader(data)))
-	if out.Code != 403 || len(s.store.Devices) != 0 {
-		t.Fatalf("expired pairing: status=%d devices=%d", out.Code, len(s.store.Devices))
+	if out.Code != 202 {
+		t.Fatalf("pair request: status=%d", out.Code)
+	}
+	var request protocol.PairingRequest
+	if err := json.Unmarshal(out.Body.Bytes(), &request); err != nil {
+		t.Fatal(err)
+	}
+	s.pairings[request.ID].request.ExpiresAt = time.Now().Add(-time.Second)
+	status := httptest.NewRecorder()
+	s.Handler().ServeHTTP(status, httptest.NewRequest("GET", "/v1/pair/"+request.ID, nil))
+	if status.Code != 404 || len(s.store.Devices) != 0 {
+		t.Fatalf("expired pairing: status=%d devices=%d", status.Code, len(s.store.Devices))
+	}
+}
+
+func TestPairingNeedsControllerApproval(t *testing.T) {
+	s, err := New(Config{StatePath: filepath.Join(t.TempDir(), "bridge.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	makeRequest := func(name string) protocol.PairingRequest {
+		data, _ := json.Marshal(protocol.PairRequest{Device: protocol.Device{Name: name, Workspace: t.TempDir()}})
+		out := httptest.NewRecorder()
+		s.Handler().ServeHTTP(out, httptest.NewRequest("POST", "/v1/pair", bytes.NewReader(data)))
+		if out.Code != 202 {
+			t.Fatalf("request status: %d", out.Code)
+		}
+		var request protocol.PairingRequest
+		if err := json.Unmarshal(out.Body.Bytes(), &request); err != nil {
+			t.Fatal(err)
+		}
+		return request
+	}
+	first := makeRequest("first")
+	if first.Verification == "" {
+		t.Fatal("verification number missing")
+	}
+	if len(s.store.Devices) != 0 {
+		t.Fatal("pending request created a device")
+	}
+	second := makeRequest("second")
+	if first.Verification == second.Verification {
+		t.Fatal("verification number was reused")
+	}
+	approve := func(id, action string) protocol.PairingStatus {
+		out := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/v1/pair-requests/"+id+"/"+action, nil)
+		req.RemoteAddr = "127.0.0.1:1234"
+		s.Handler().ServeHTTP(out, req)
+		if out.Code != 200 {
+			t.Fatalf("%s status: %d %s", action, out.Code, out.Body.String())
+		}
+		var status protocol.PairingStatus
+		if err := json.Unmarshal(out.Body.Bytes(), &status); err != nil {
+			t.Fatal(err)
+		}
+		return status
+	}
+	if status := approve(first.ID, "reject"); status.Status != "rejected" || status.Credentials != nil {
+		t.Fatalf("rejected request: %+v", status)
+	}
+	if status := approve(second.ID, "approve"); status.Status != "approved" || status.Credentials == nil {
+		t.Fatalf("approved request: %+v", status)
+	}
+	if len(s.store.Devices) != 1 {
+		t.Fatalf("devices after approval: %d", len(s.store.Devices))
 	}
 }
 func TestCorruptStateIsReported(t *testing.T) {

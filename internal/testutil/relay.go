@@ -48,10 +48,29 @@ func New(t *testing.T, root string) *Relay {
 		t.Fatal(err)
 	}
 	t.Cleanup(w.Close)
-	creds, err := w.Pair(context.Background(), httpServer.URL, b.NewPairing().Code, state.Path("worker"))
-	if err != nil {
+	pairCtx, cancelPair := context.WithCancel(context.Background())
+	defer cancelPair()
+	requestCh := make(chan protocol.PairingRequest, 1)
+	credsCh := make(chan struct {
+		creds protocol.Credentials
+		err   error
+	}, 1)
+	go func() {
+		creds, err := w.Pair(pairCtx, httpServer.URL, b.Fingerprint(), state.Path("worker"), func(request protocol.PairingRequest) { requestCh <- request })
+		credsCh <- struct {
+			creds protocol.Credentials
+			err   error
+		}{creds, err}
+	}()
+	request := <-requestCh
+	if _, err := bridge.NewClient(httpServer.URL).DecidePairing(context.Background(), request.ID, true); err != nil {
 		t.Fatal(err)
 	}
+	result := <-credsCh
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	creds := result.creds
 	peer, err := w.Connect(context.Background(), creds)
 	if err != nil {
 		t.Fatal(err)

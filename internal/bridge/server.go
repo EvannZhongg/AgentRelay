@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
@@ -10,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"path"
@@ -39,7 +41,13 @@ type Server struct {
 	mu          sync.RWMutex
 	store       registry
 	connections map[string]*transport.Peer
-	pairings    map[string]time.Time
+	pairings    map[string]*pendingPairing
+}
+
+type pendingPairing struct {
+	request     protocol.PairingRequest
+	status      string
+	credentials *protocol.Credentials
 }
 
 func New(cfg Config) (*Server, error) {
@@ -49,7 +57,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.StatePath == "" {
 		cfg.StatePath = state.Path("bridge")
 	}
-	s := &Server{cfg: cfg, connections: map[string]*transport.Peer{}, pairings: map[string]time.Time{}}
+	s := &Server{cfg: cfg, connections: map[string]*transport.Peer{}, pairings: map[string]*pendingPairing{}}
 	if err := state.Load(cfg.StatePath, &s.store); err != nil {
 		return nil, fmt.Errorf("load bridge state: %w", err)
 	}
@@ -88,9 +96,11 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, 200, protocol.Health{Status: "ok", APIVersion: protocol.APIVersion})
 	})
 	mux.HandleFunc("/v1/pair", s.pair)
+	mux.HandleFunc("/v1/pair/", s.pairStatus)
 	mux.HandleFunc("/v1/connect", s.connect)
 	admin := http.NewServeMux()
-	admin.HandleFunc("/v1/pairings", s.pairing)
+	admin.HandleFunc("/v1/pair-requests", s.pairRequests)
+	admin.HandleFunc("/v1/pair-requests/", s.pairRequestAction)
 	admin.HandleFunc("/v1/devices", s.devicesRoot)
 	admin.HandleFunc("/v1/devices/", s.deviceRoute)
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -119,27 +129,6 @@ func (s *Server) Close() {
 		p.Close()
 	}
 }
-func (s *Server) NewPairing() protocol.Pairing {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := time.Now()
-	for code, expires := range s.pairings {
-		if !expires.After(now) {
-			delete(s.pairings, code)
-		}
-	}
-	code := s.Fingerprint() + "." + transport.Token()
-	expires := now.Add(5 * time.Minute)
-	s.pairings[code] = expires
-	return protocol.Pairing{Code: code, ExpiresAt: expires}
-}
-func (s *Server) pairing(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		methodNotAllowed(w)
-		return
-	}
-	writeJSON(w, 201, s.NewPairing())
-}
 func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		methodNotAllowed(w)
@@ -156,26 +145,117 @@ func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	expires, ok := s.pairings[req.Code]
-	if !ok || !expires.After(time.Now()) {
-		writeError(w, 403, errors.New("pairing code invalid, expired or already used"))
+	now := time.Now()
+	s.cleanupPairingsLocked(now)
+	id := transport.Token()
+	verification, err := verificationCode()
+	if err != nil {
+		writeError(w, 500, err)
+		return
+	}
+	pending := &pendingPairing{request: protocol.PairingRequest{ID: id, Device: req.Device, Verification: verification, Fingerprint: s.Fingerprint(), ExpiresAt: now.Add(5 * time.Minute)}, status: "pending"}
+	s.pairings[id] = pending
+	writeJSON(w, http.StatusAccepted, pending.request)
+}
+
+func verificationCode() (string, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		return "", err
+	}
+	value := fmt.Sprintf("%06d", n.Int64())
+	return value[:3] + " " + value[3:], nil
+}
+
+func (s *Server) cleanupPairingsLocked(now time.Time) {
+	for id, pending := range s.pairings {
+		if !pending.request.ExpiresAt.After(now) {
+			delete(s.pairings, id)
+		}
+	}
+}
+
+func (s *Server) pairStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/pair/"), "/")
+	s.mu.Lock()
+	s.cleanupPairingsLocked(time.Now())
+	pending, ok := s.pairings[id]
+	if !ok {
+		s.mu.Unlock()
+		writeError(w, http.StatusNotFound, errors.New("pairing request not found or expired"))
+		return
+	}
+	status := protocol.PairingStatus{PairingRequest: pending.request, Status: pending.status, Credentials: pending.credentials}
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) pairRequests(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cleanupPairingsLocked(time.Now())
+	out := make([]protocol.PairingRequest, 0)
+	for _, pending := range s.pairings {
+		if pending.status == "pending" {
+			out = append(out, pending.request)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) pairRequestAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w)
+		return
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/pair-requests/"), "/"), "/")
+	if len(parts) != 2 || (parts[1] != "approve" && parts[1] != "reject") {
+		writeError(w, http.StatusNotFound, errors.New("unknown pairing request action"))
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cleanupPairingsLocked(time.Now())
+	pending, ok := s.pairings[parts[0]]
+	if !ok {
+		writeError(w, http.StatusNotFound, errors.New("pairing request not found or expired"))
+		return
+	}
+	if pending.status != "pending" {
+		writeError(w, http.StatusConflict, errors.New("pairing request already decided"))
+		return
+	}
+	if parts[1] == "reject" {
+		pending.status = "rejected"
+		writeJSON(w, http.StatusOK, protocol.PairingStatus{PairingRequest: pending.request, Status: pending.status})
 		return
 	}
 	id, token := transport.Token(), transport.Token()
-	d := req.Device
+	d := pending.request.Device
 	d.ID = id
 	d.Authorized = true
 	d.Online = false
 	d.LastSeen = time.Time{}
 	d.Mappings = map[string]string{}
+	credentials := &protocol.Credentials{DeviceID: id, Token: token, Workspace: d.Workspace, Fingerprint: s.Fingerprint()}
 	s.store.Devices[id] = record{Device: d, TokenHash: tokenHash(token)}
 	if err := s.save(); err != nil {
 		delete(s.store.Devices, id)
-		writeError(w, 500, err)
+		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	delete(s.pairings, req.Code)
-	writeJSON(w, 201, protocol.Credentials{DeviceID: id, Token: token, Workspace: d.Workspace, Fingerprint: s.Fingerprint()})
+	pending.status = "approved"
+	pending.credentials = credentials
+	writeJSON(w, http.StatusOK, protocol.PairingStatus{PairingRequest: pending.request, Status: pending.status, Credentials: credentials})
 }
 func tokenHash(token string) string {
 	sum := sha256.Sum256([]byte(token))

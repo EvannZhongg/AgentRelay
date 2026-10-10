@@ -19,7 +19,7 @@ echo ==========================================
 echo  listen : %LISTEN%
 echo.
 echo  Workers discover this controller and connect outbound.
-echo  Paste the pairing code shown below into worker setup.
+echo  Approve or reject connection requests shown below.
 echo.
 echo  Press Ctrl+C to stop.
 echo.

@@ -114,14 +114,22 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
-type Pairing struct {
-	Code      string    `json:"code"`
-	ExpiresAt time.Time `json:"expires_at"`
+type PairRequest struct {
+	Device Device `json:"device"`
 }
 
-type PairRequest struct {
-	Code   string `json:"code"`
-	Device Device `json:"device"`
+type PairingRequest struct {
+	ID           string    `json:"id"`
+	Device       Device    `json:"device"`
+	Verification string    `json:"verification"`
+	Fingerprint  string    `json:"fingerprint,omitempty"`
+	ExpiresAt    time.Time `json:"expires_at"`
+}
+
+type PairingStatus struct {
+	PairingRequest
+	Status      string       `json:"status"`
+	Credentials *Credentials `json:"credentials,omitempty"`
 }
 
 type Credentials struct {

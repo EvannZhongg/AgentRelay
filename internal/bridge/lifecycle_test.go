@@ -160,20 +160,23 @@ func TestPairingAuthenticationRevocationAndRemoval(t *testing.T) {
 	if _, err := relay.Worker.Connect(ctx, bad); !errors.Is(err, worker.ErrUnauthorized) {
 		t.Fatalf("invalid token accepted: %v", err)
 	}
-	code := relay.Bridge.NewPairing().Code
 	other, err := worker.New(worker.Config{Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = other.Pair(ctx, relay.HTTP.URL, code, filepath.Join(t.TempDir(), "worker.json")); err != nil {
+	requestCh := make(chan protocol.PairingRequest, 1)
+	resultCh := make(chan error, 1)
+	otherState := filepath.Join(t.TempDir(), "worker.json")
+	go func() {
+		_, pairErr := other.Pair(ctx, relay.HTTP.URL, relay.Bridge.Fingerprint(), otherState, func(request protocol.PairingRequest) { requestCh <- request })
+		resultCh <- pairErr
+	}()
+	pairRequest := <-requestCh
+	if _, err = relay.Client.DecidePairing(ctx, pairRequest.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = other.Pair(ctx, relay.HTTP.URL, code, filepath.Join(t.TempDir(), "worker.json")); err == nil {
-		t.Fatal("one-time code reused")
-	}
-	mismatch := strings.Repeat("0", 64) + "." + strings.Split(relay.Bridge.NewPairing().Code, ".")[1]
-	if _, err = other.Pair(ctx, relay.HTTP.URL, mismatch, filepath.Join(t.TempDir(), "worker.json")); err == nil {
-		t.Fatal("certificate mismatch accepted")
+	if err = <-resultCh; err != nil {
+		t.Fatal(err)
 	}
 	unauthorized := false
 	if _, err = relay.Client.UpdateDevice(ctx, relay.Device.ID, bridge.DeviceUpdate{Authorized: &unauthorized}); err != nil {
@@ -254,7 +257,7 @@ func TestWorkerReconnectsAfterBridgeRestart(t *testing.T) {
 func TestControllerAPIRejectsRemoteCallersAndBrowserOrigins(t *testing.T) {
 	relay := testutil.New(t, "")
 	for _, remote := range []string{"192.168.1.50:1234", "127.0.0.1:1234"} {
-		req := httptest.NewRequest("POST", "/v1/pairings", nil)
+		req := httptest.NewRequest("GET", "/v1/pair-requests", nil)
 		req.RemoteAddr = remote
 		req.Header.Set("X-Forwarded-For", "127.0.0.1")
 		if strings.HasPrefix(remote, "127.") {

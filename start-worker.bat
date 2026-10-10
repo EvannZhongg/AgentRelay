@@ -14,7 +14,7 @@ echo ==========================================
 echo  AgentRelay worker
 echo ==========================================
 echo.
-echo  First run: discover a controller and paste its pairing code.
+echo  First run: discover a controller and wait for controller approval.
 echo  Later runs: connect using saved configuration.
 echo  Drag a folder onto this file to pair with that workspace.
 echo  Press Ctrl+C to stop.

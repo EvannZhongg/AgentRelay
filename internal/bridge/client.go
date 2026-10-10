@@ -73,8 +73,16 @@ func (c *Client) Devices(ctx context.Context) (out []protocol.Device, err error)
 	err = c.Do(ctx, "GET", "/v1/devices", nil, &out)
 	return
 }
-func (c *Client) Pairing(ctx context.Context) (out protocol.Pairing, err error) {
-	err = c.Do(ctx, "POST", "/v1/pairings", nil, &out)
+func (c *Client) PairRequests(ctx context.Context) (out []protocol.PairingRequest, err error) {
+	err = c.Do(ctx, "GET", "/v1/pair-requests", nil, &out)
+	return
+}
+func (c *Client) DecidePairing(ctx context.Context, id string, approve bool) (out protocol.PairingStatus, err error) {
+	action := "reject"
+	if approve {
+		action = "approve"
+	}
+	err = c.Do(ctx, "POST", "/v1/pair-requests/"+url.PathEscape(id)+"/"+action, nil, &out)
 	return
 }
 func (c *Client) UpdateDevice(ctx context.Context, id string, req DeviceUpdate) (out protocol.Device, err error) {
