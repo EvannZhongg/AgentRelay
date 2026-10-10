@@ -24,8 +24,20 @@ The current registration flow is intentionally explicit: the operator starts a W
 go test ./...
 go vet ./...
 go build -o AgentRelay.exe ./cmd/AgentRelay
-go build -o AgentRelay-mcp.exe ./cmd/AgentRelay-mcp
+go build -ldflags "-H=windowsgui" -o AgentRelay-mcp.exe ./cmd/AgentRelay-mcp
 ```
+
+`AgentRelay.exe` is a console program because it is driven from a terminal. `AgentRelay-mcp.exe` is built with the Windows GUI subsystem so an MCP client can start it as a child process without flashing a console window; it still speaks newline-delimited JSON-RPC over stdin and stdout.
+
+## Launchers
+
+`start-worker.bat`, `start-bridge.bat` and `mcp-config.bat` wrap the CLI for double-click use. They expect `AgentRelay.exe` in the same directory as the launcher, which is where the build above places it.
+
+Double-clicking `AgentRelay.exe` directly is not useful: it prints usage and exits immediately, so the window vanishes. `AgentRelay-mcp.exe` is never started by hand, because an MCP client starts it over stdio.
+
+- `start-worker.bat` accepts an optional workspace path; dragging a folder onto the file uses that folder as the worker workspace.
+- `start-bridge.bat` accepts an optional listen address and defaults to `:8764`.
+- `mcp-config.bat` prints the MCP configuration JSON and accepts an optional bridge URL.
 
 ## Windows-to-Windows smoke test
 
