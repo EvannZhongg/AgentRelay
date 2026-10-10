@@ -1,0 +1,3 @@
+# Batch files must check out with CRLF regardless of the client's core.autocrlf
+# setting, otherwise cmd.exe can misparse them on a fresh clone.
+*.bat text eol=crlf
