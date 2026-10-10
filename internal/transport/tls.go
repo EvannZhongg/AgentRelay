@@ -20,6 +20,11 @@ type Identity struct {
 	PrivateKey  string `json:"private_key"`
 }
 
+var (
+	ErrBridgeCertificateMissing  = errors.New("bridge certificate missing")
+	ErrBridgeCertificateMismatch = errors.New("bridge certificate does not match pairing identity")
+)
+
 func Token() string {
 	var data [32]byte
 	if _, err := rand.Read(data[:]); err != nil {
@@ -69,11 +74,11 @@ func (i Identity) Fingerprint() string {
 func PinnedTLS(fingerprint string) *tls.Config {
 	return &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true, VerifyConnection: func(cs tls.ConnectionState) error {
 		if len(cs.PeerCertificates) == 0 {
-			return errors.New("bridge certificate missing")
+			return ErrBridgeCertificateMissing
 		}
 		sum := sha256.Sum256(cs.PeerCertificates[0].Raw)
 		if hex.EncodeToString(sum[:]) != fingerprint {
-			return errors.New("bridge certificate does not match pairing identity")
+			return ErrBridgeCertificateMismatch
 		}
 		return nil
 	}}

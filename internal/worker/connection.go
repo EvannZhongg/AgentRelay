@@ -23,7 +23,13 @@ var ErrUnauthorized = errors.New("device authorization rejected; use worker setu
 const (
 	pairRetryInitial = 250 * time.Millisecond
 	pairRetryMax     = 5 * time.Second
+	pairRetryLimit   = 8
 )
+
+type nonRetryablePairError struct{ err error }
+
+func (e nonRetryablePairError) Error() string { return e.err.Error() }
+func (e nonRetryablePairError) Unwrap() error { return e.err }
 
 func validateBridge(base string) error {
 	u, err := url.Parse(base)
@@ -46,7 +52,7 @@ func (s *Server) Pair(ctx context.Context, base, fingerprint, statePath string, 
 	transportConfig := transport.PinnedTLS(fingerprint)
 	client := &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: transportConfig}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	data, _ := json.Marshal(protocol.PairRequest{Device: s.Device()})
-	request, err := submitPairingRequest(ctx, client, base, data)
+	request, err := submitPairingRequest(ctx, client, base, fingerprint, data)
 	if err != nil {
 		return protocol.Credentials{}, err
 	}
@@ -61,7 +67,7 @@ func (s *Server) Pair(ctx context.Context, base, fingerprint, statePath string, 
 		statusResp, err := retryHTTP(ctx, func() (*http.Response, error) {
 			statusReq, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/v1/pair/"+url.PathEscape(request.ID), nil)
 			if err != nil {
-				return nil, err
+				return nil, nonRetryablePairError{err: err}
 			}
 			return client.Do(statusReq)
 		})
@@ -70,7 +76,7 @@ func (s *Server) Pair(ctx context.Context, base, fingerprint, statePath string, 
 		}
 		if statusResp.StatusCode == http.StatusNotFound {
 			statusResp.Body.Close()
-			request, err = submitPairingRequest(ctx, client, base, data)
+			request, err = submitPairingRequest(ctx, client, base, fingerprint, data)
 			if err != nil {
 				return credentials, err
 			}
@@ -94,7 +100,7 @@ func (s *Server) Pair(ctx context.Context, base, fingerprint, statePath string, 
 			credentials = *status.Credentials
 			credentials.BridgeURL = strings.TrimRight(base, "/")
 			credentials.Workspace = s.cfg.Workspace
-			if credentials.DeviceID == "" || credentials.Token == "" || credentials.Fingerprint == "" {
+			if credentials.DeviceID == "" || credentials.Token == "" || credentials.Fingerprint != fingerprint {
 				return credentials, errors.New("invalid pairing approval")
 			}
 			break
@@ -120,11 +126,11 @@ func (s *Server) Pair(ctx context.Context, base, fingerprint, statePath string, 
 	return credentials, nil
 }
 
-func submitPairingRequest(ctx context.Context, client *http.Client, base string, data []byte) (protocol.PairingRequest, error) {
+func submitPairingRequest(ctx context.Context, client *http.Client, base, fingerprint string, data []byte) (protocol.PairingRequest, error) {
 	resp, err := retryHTTP(ctx, func() (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/v1/pair", bytes.NewReader(data))
 		if err != nil {
-			return nil, err
+			return nil, nonRetryablePairError{err: err}
 		}
 		req.Header.Set("Content-Type", "application/json")
 		return client.Do(req)
@@ -146,15 +152,15 @@ func submitPairingRequest(ctx context.Context, client *http.Client, base string,
 	if request.ID == "" || request.Verification == "" || request.ExpiresAt.Before(time.Now()) {
 		return protocol.PairingRequest{}, errors.New("invalid pairing request response")
 	}
-	if request.Fingerprint == "" {
-		return protocol.PairingRequest{}, errors.New("controller did not provide a certificate identity")
+	if request.Fingerprint != fingerprint {
+		return protocol.PairingRequest{}, errors.New("controller certificate identity does not match the discovered fingerprint")
 	}
 	return request, nil
 }
 
 func retryHTTP(ctx context.Context, operation func() (*http.Response, error)) (*http.Response, error) {
 	delay := pairRetryInitial
-	for {
+	for attempt := 1; ; attempt++ {
 		resp, err := operation()
 		if err == nil {
 			return resp, nil
@@ -164,6 +170,13 @@ func retryHTTP(ctx context.Context, operation func() (*http.Response, error)) (*
 		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if !retryablePairError(err) || attempt >= pairRetryLimit {
+			var permanent nonRetryablePairError
+			if errors.As(err, &permanent) {
+				return nil, permanent.err
+			}
+			return nil, err
 		}
 		timer := time.NewTimer(delay)
 		select {
@@ -179,6 +192,21 @@ func retryHTTP(ctx context.Context, operation func() (*http.Response, error)) (*
 			}
 		}
 	}
+}
+
+func retryablePairError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var permanent nonRetryablePairError
+	if errors.As(err, &permanent) {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "certificate") || strings.Contains(lower, "fingerprint") || strings.Contains(lower, "tls: failed to verify") {
+		return false
+	}
+	return !errors.Is(err, transport.ErrBridgeCertificateMissing) && !errors.Is(err, transport.ErrBridgeCertificateMismatch)
 }
 
 func pairingHTTPError(prefix string, resp *http.Response) error {

@@ -283,5 +283,5 @@ func printJSON(v any) error {
 	return err
 }
 func usage() {
-	fmt.Println("AgentRelay\n\nUsage:\n  AgentRelay setup\n  AgentRelay bridge serve|pair\n  AgentRelay worker setup|serve\n  AgentRelay device list|rename|authorize|revoke|remove\n  AgentRelay exec --device <id> [--dir <local-project-or-remote-path>] <command>\n  AgentRelay task start|list|get|retrieve|cancel --device <id> [--id <task-id>]\n  AgentRelay sync --device <id> --source <dir>\n  AgentRelay pull --device <id> [--out <local-dir>] <remote-path>...\n  AgentRelay session create|list|get|send|close --device <id> [--id <session-id>]\n  AgentRelay mcp config")
+	fmt.Println("AgentRelay\n\nUsage:\n  AgentRelay setup\n  AgentRelay bridge serve\n  AgentRelay worker setup|serve\n  AgentRelay device list|rename|authorize|revoke|remove\n  AgentRelay exec --device <id> [--dir <local-project-or-remote-path>] <command>\n  AgentRelay task start|list|get|retrieve|cancel --device <id> [--id <task-id>]\n  AgentRelay sync --device <id> --source <dir>\n  AgentRelay pull --device <id> [--out <local-dir>] <remote-path>...\n  AgentRelay session create|list|get|send|close --device <id> [--id <session-id>]\n  AgentRelay mcp config")
 }

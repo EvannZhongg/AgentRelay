@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"AgentRelay/internal/transport"
 )
 
 func TestPairRequiresPinnedControllerFingerprint(t *testing.T) {
@@ -52,5 +54,33 @@ func TestPairingHTTPErrorIncludesStatusWhenBodyHasNoMessage(t *testing.T) {
 	err := pairingHTTPError("pairing status request failed", resp)
 	if !strings.Contains(err.Error(), "404 Not Found") || !strings.Contains(err.Error(), "Not Found") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRetryHTTPDoesNotRetryPinnedCertificateErrors(t *testing.T) {
+	attempts := 0
+	_, err := retryHTTP(context.Background(), func() (*http.Response, error) {
+		attempts++
+		return nil, transport.ErrBridgeCertificateMismatch
+	})
+	if !errors.Is(err, transport.ErrBridgeCertificateMismatch) {
+		t.Fatalf("error = %v", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+}
+
+func TestRetryHTTPDoesNotRetryRequestConstructionErrors(t *testing.T) {
+	attempts := 0
+	_, err := retryHTTP(context.Background(), func() (*http.Response, error) {
+		attempts++
+		return nil, nonRetryablePairError{err: errors.New("invalid control character in URL")}
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid control character") {
+		t.Fatalf("error = %v", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
 	}
 }

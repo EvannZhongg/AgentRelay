@@ -57,7 +57,7 @@ func setupCommand(args []string) error {
 		if credentials.DeviceID != "" {
 			return runWorker(credentials)
 		}
-		return setupWorker(input, "", "")
+		return setupWorker(input, "")
 	default:
 		return errors.New("choose 1 or 2")
 	}
@@ -67,18 +67,17 @@ func workerCommand(args []string) error {
 		return errors.New("usage: AgentRelay worker setup|serve")
 	}
 	f := flag.NewFlagSet("worker", flag.ContinueOnError)
-	base := f.String("bridge", "", "controller URL (must come from discovery)")
 	workspace := f.String("workspace", "", "workspace for first setup")
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
 	if args[0] == "setup" {
-		return setupWorker(bufio.NewReader(os.Stdin), *base, *workspace)
+		return setupWorker(bufio.NewReader(os.Stdin), *workspace)
 	}
 	if args[0] != "serve" {
 		return errors.New("usage: AgentRelay worker setup|serve")
 	}
-	if *base != "" || *workspace != "" {
+	if *workspace != "" {
 		return errors.New("configure bridge and workspace with worker setup; serve uses saved pairing")
 	}
 	var credentials protocol.Credentials
@@ -86,40 +85,35 @@ func workerCommand(args []string) error {
 		return err
 	}
 	if credentials.DeviceID == "" {
-		return setupWorker(bufio.NewReader(os.Stdin), "", "")
+		return setupWorker(bufio.NewReader(os.Stdin), "")
 	}
 	return runWorker(credentials)
 }
-func setupWorker(input *bufio.Reader, base, workspace string) error {
+func setupWorker(input *bufio.Reader, workspace string) error {
 	ctx := context.Background()
-	fingerprint := ""
-	if base == "" {
-		fmt.Println("Searching for controllers...")
-		found, err := discovery.Discover(ctx)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Discovery:", err)
-		}
-		if len(found) > 0 {
-			for i, item := range found {
-				fmt.Printf("%d. %s (%s)\n", i+1, item.Name, item.URL)
-			}
-			selection, err := prompt(input, "Controller number", "1")
-			if err != nil {
-				return err
-			}
-			index, err := strconv.Atoi(selection)
-			if err != nil || index < 1 || index > len(found) {
-				return errors.New("select a discovered controller; manual URLs cannot establish certificate trust")
-			}
-			base = found[index-1].URL
-			fingerprint = found[index-1].Fingerprint
-		}
-		if base == "" {
-			return errors.New("no controller with a trusted certificate was discovered")
-		}
+	fmt.Println("Searching for controllers...")
+	found, err := discovery.Discover(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Discovery:", err)
 	}
+	if len(found) == 0 {
+		return errors.New("no controller with a trusted certificate was discovered")
+	}
+	for i, item := range found {
+		fmt.Printf("%d. %s (%s)\n", i+1, item.Name, item.URL)
+	}
+	selection, err := prompt(input, "Controller number", "1")
+	if err != nil {
+		return err
+	}
+	index, err := strconv.Atoi(selection)
+	if err != nil || index < 1 || index > len(found) {
+		return errors.New("select a discovered controller")
+	}
+	base := found[index-1].URL
+	fingerprint := found[index-1].Fingerprint
 	if fingerprint == "" {
-		return errors.New("controller certificate fingerprint is required; select a controller discovered on the local network")
+		return errors.New("discovered controller did not provide a certificate fingerprint")
 	}
 	if workspace == "" {
 		home, err := os.UserHomeDir()
