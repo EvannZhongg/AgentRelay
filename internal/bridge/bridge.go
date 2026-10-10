@@ -62,6 +62,29 @@ func (s *Server) devicesRoot(w http.ResponseWriter, r *http.Request) {
 			out = append(out, d)
 		}
 		s.mu.RUnlock()
+		var checks sync.WaitGroup
+		for i := range out {
+			checks.Add(1)
+			go func(d *protocol.Device) {
+				defer checks.Done()
+				ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+				defer cancel()
+				var health protocol.Health
+				d.Online = s.call(ctx, d.WorkerURL, "/v1/health", http.MethodGet, nil, &health) == nil && health.Status == "ok"
+				if d.Online {
+					d.LastSeen = time.Now()
+				}
+			}(&out[i])
+		}
+		checks.Wait()
+		s.mu.Lock()
+		for _, d := range out {
+			if current, exists := s.devices[d.ID]; exists && current.WorkerURL == d.WorkerURL {
+				current.Online, current.LastSeen = d.Online, d.LastSeen
+				s.devices[d.ID] = current
+			}
+		}
+		s.mu.Unlock()
 		writeJSON(w, http.StatusOK, out)
 	case http.MethodPost:
 		var req registerRequest
@@ -98,6 +121,7 @@ func (s *Server) register(ctx context.Context, req registerRequest) (protocol.De
 		d.Name = req.Name
 	}
 	d.LastSeen = time.Now()
+	d.Online = true
 	s.mu.Lock()
 	s.devices[d.ID] = d
 	s.mu.Unlock()
@@ -203,7 +227,10 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 		return err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
 	if resp.StatusCode >= 300 {
 		var e protocol.ErrorResponse
 		if json.Unmarshal(data, &e) == nil && e.Error != "" {
@@ -243,6 +270,45 @@ func (c *Client) StartTask(ctx context.Context, id string, req protocol.TaskRequ
 func (c *Client) GetTask(ctx context.Context, id, taskID string) (protocol.Task, error) {
 	var out protocol.Task
 	err := c.Do(ctx, http.MethodGet, "/v1/devices/"+url.PathEscape(id)+"/tasks/"+url.PathEscape(taskID), nil, &out)
+	return out, err
+}
+func (c *Client) ListTasks(ctx context.Context, id string) ([]protocol.Task, error) {
+	var out []protocol.Task
+	err := c.Do(ctx, http.MethodGet, "/v1/devices/"+url.PathEscape(id)+"/tasks", nil, &out)
+	return out, err
+}
+func (c *Client) CancelTask(ctx context.Context, id, taskID string) error {
+	return c.Do(ctx, http.MethodDelete, "/v1/devices/"+url.PathEscape(id)+"/tasks/"+url.PathEscape(taskID), nil, nil)
+}
+func (c *Client) ReadFile(ctx context.Context, id, path string) (protocol.ReadResponse, error) {
+	var out protocol.ReadResponse
+	endpoint := "/v1/devices/" + url.PathEscape(id) + "/files/read?path=" + url.QueryEscape(path)
+	err := c.Do(ctx, http.MethodGet, endpoint, nil, &out)
+	return out, err
+}
+func (c *Client) CreateSession(ctx context.Context, id string, req protocol.SessionRequest) (protocol.Session, error) {
+	var out protocol.Session
+	err := c.Do(ctx, http.MethodPost, "/v1/devices/"+url.PathEscape(id)+"/sessions", req, &out)
+	return out, err
+}
+func (c *Client) ListSessions(ctx context.Context, id string) ([]protocol.Session, error) {
+	var out []protocol.Session
+	err := c.Do(ctx, http.MethodGet, "/v1/devices/"+url.PathEscape(id)+"/sessions", nil, &out)
+	return out, err
+}
+func (c *Client) GetSession(ctx context.Context, id, sessionID string) (protocol.Session, error) {
+	var out protocol.Session
+	err := c.Do(ctx, http.MethodGet, "/v1/devices/"+url.PathEscape(id)+"/sessions/"+url.PathEscape(sessionID), nil, &out)
+	return out, err
+}
+func (c *Client) WriteSession(ctx context.Context, id, sessionID, input string) (protocol.Session, error) {
+	var out protocol.Session
+	err := c.Do(ctx, http.MethodPost, "/v1/devices/"+url.PathEscape(id)+"/sessions/"+url.PathEscape(sessionID)+"/input", protocol.SessionInput{Input: input}, &out)
+	return out, err
+}
+func (c *Client) CloseSession(ctx context.Context, id, sessionID string) (protocol.Session, error) {
+	var out protocol.Session
+	err := c.Do(ctx, http.MethodDelete, "/v1/devices/"+url.PathEscape(id)+"/sessions/"+url.PathEscape(sessionID), nil, &out)
 	return out, err
 }
 

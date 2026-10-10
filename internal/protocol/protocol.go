@@ -14,12 +14,14 @@ type Device struct {
 	Capabilities Capabilities      `json:"capabilities"`
 	Metadata     map[string]string `json:"metadata,omitempty"`
 	LastSeen     time.Time         `json:"last_seen"`
+	Online       bool              `json:"online"`
 }
 
 type Capabilities struct {
 	Exec       bool     `json:"exec"`
 	Files      bool     `json:"files"`
 	Tasks      bool     `json:"tasks"`
+	Sessions   bool     `json:"sessions"`
 	Shells     []string `json:"shells,omitempty"`
 	MaxPayload int64    `json:"max_payload_bytes,omitempty"`
 }
@@ -78,6 +80,29 @@ type Task struct {
 
 type TaskRequest struct {
 	ExecRequest
+}
+
+type SessionRequest struct {
+	Command    string            `json:"command"`
+	WorkingDir string            `json:"working_dir,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+}
+
+type SessionInput struct {
+	Input string `json:"input"`
+}
+
+type Session struct {
+	ID              string     `json:"id"`
+	Status          string     `json:"status"`
+	Command         string     `json:"command"`
+	StartedAt       time.Time  `json:"started_at"`
+	FinishedAt      *time.Time `json:"finished_at,omitempty"`
+	Stdout          string     `json:"stdout"`
+	Stderr          string     `json:"stderr"`
+	ExitCode        *int       `json:"exit_code,omitempty"`
+	Error           string     `json:"error,omitempty"`
+	OutputTruncated bool       `json:"output_truncated,omitempty"`
 }
 
 type ErrorResponse struct {

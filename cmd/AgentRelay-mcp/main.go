@@ -5,9 +5,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"AgentRelay/internal/bridge"
@@ -16,16 +20,24 @@ import (
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      any             `json:"id"`
+	ID      json.RawMessage `json:"id"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params"`
 }
+
 type rpcResponse struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      any    `json:"id,omitempty"`
-	Result  any    `json:"result,omitempty"`
-	Error   any    `json:"error,omitempty"`
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  any             `json:"result,omitempty"`
+	Error   any             `json:"error,omitempty"`
 }
+
+type rpcError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+func (e *rpcError) Error() string { return e.Message }
 
 const (
 	currentProtocolVersion = "2025-06-18"
@@ -34,54 +46,88 @@ const (
 )
 
 func main() {
-	base := flag.String("bridge", "http://127.0.0.1:8764", "bridge URL")
+	base := flag.String("bridge", "http://127.0.0.1:8764", "Bridge URL")
 	flag.Parse()
 	client := bridge.NewClient(*base)
-	scanner := bufio.NewScanner(os.Stdin)
+	if err := serve(client, os.Stdin, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func serve(client *bridge.Client, input io.Reader, output io.Writer) error {
+	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 64<<10), 64<<20)
-	encoder := json.NewEncoder(os.Stdout)
+	encoder := json.NewEncoder(output)
 	for scanner.Scan() {
 		var req rpcRequest
-		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
-			_ = encoder.Encode(rpcResponse{JSONRPC: "2.0", Error: map[string]any{"code": -32700, "message": err.Error()}})
+		if !json.Valid(scanner.Bytes()) {
+			if err := encoder.Encode(rpcResponse{JSONRPC: "2.0", Error: &rpcError{Code: -32700, Message: "Parse error"}}); err != nil {
+				return err
+			}
 			continue
 		}
-		if req.ID == nil && strings.HasPrefix(req.Method, "notifications/") {
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil || req.JSONRPC != "2.0" || req.Method == "" || !validID(req.ID) {
+			if err := encoder.Encode(rpcResponse{JSONRPC: "2.0", Error: &rpcError{Code: -32600, Message: "Invalid Request"}}); err != nil {
+				return err
+			}
+			continue
+		}
+		if len(req.ID) == 0 {
 			continue
 		}
 		result, err := handle(context.Background(), client, req)
 		resp := rpcResponse{JSONRPC: "2.0", ID: req.ID}
 		if err != nil {
-			resp.Error = map[string]any{"code": -32000, "message": err.Error()}
+			var rpcErr *rpcError
+			if !errors.As(err, &rpcErr) {
+				rpcErr = &rpcError{Code: -32603, Message: err.Error()}
+			}
+			resp.Error = rpcErr
 		} else {
 			resp.Result = result
 		}
-		_ = encoder.Encode(resp)
+		if err := encoder.Encode(resp); err != nil {
+			return err
+		}
+	}
+	return scanner.Err()
+}
+
+func validID(id json.RawMessage) bool {
+	if len(id) == 0 {
+		return true
+	}
+	var value any
+	decoder := json.NewDecoder(strings.NewReader(string(id)))
+	decoder.UseNumber()
+	if decoder.Decode(&value) != nil {
+		return false
+	}
+	switch value.(type) {
+	case string, json.Number, nil:
+		return true
+	default:
+		return false
 	}
 }
 
-func handle(ctx context.Context, c *bridge.Client, req rpcRequest) (any, error) {
+func handle(ctx context.Context, client *bridge.Client, req rpcRequest) (any, error) {
 	switch req.Method {
 	case "initialize":
 		return initializeResult(req.Params), nil
-	case "notifications/initialized":
-		return map[string]any{}, nil
-	case "ping":
+	case "notifications/initialized", "ping":
 		return map[string]any{}, nil
 	case "tools/list":
-		return map[string]any{"tools": []any{
-			map[string]any{"name": "list_devices", "description": "List registered AgentRelay devices", "inputSchema": map[string]any{"type": "object"}},
-			map[string]any{"name": "exec", "description": "Execute a command in a device workspace", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"device_id": map[string]string{"type": "string"}, "command": map[string]string{"type": "string"}, "working_dir": map[string]string{"type": "string"}}, "required": []string{"device_id", "command"}}},
-			map[string]any{"name": "sync_files", "description": "Synchronize base64 encoded files to a device", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"device_id": map[string]string{"type": "string"}, "root": map[string]string{"type": "string"}, "files": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"path": map[string]string{"type": "string"}, "content_base64": map[string]string{"type": "string"}}, "required": []string{"path", "content_base64"}}}}, "required": []string{"device_id", "files"}}},
-		}}, nil
+		return map[string]any{"tools": toolDefinitions()}, nil
 	case "tools/call":
-		result, err := callTool(ctx, c, req.Params)
+		result, err := callTool(ctx, client, req.Params)
 		if err != nil {
-			return map[string]any{"content": []any{map[string]any{"type": "text", "text": err.Error()}}, "isError": true}, nil
+			return toolError(err), nil
 		}
 		return result, nil
 	default:
-		return nil, fmt.Errorf("method not found: %s", req.Method)
+		return nil, &rpcError{Code: -32601, Message: "method not found: " + req.Method}
 	}
 }
 
@@ -98,54 +144,346 @@ func initializeResult(raw json.RawMessage) map[string]any {
 	}
 	return map[string]any{
 		"protocolVersion": protocolVersion,
-		"capabilities": map[string]any{
-			"tools": map[string]any{"listChanged": false},
-		},
-		"serverInfo": map[string]string{"name": serverName, "version": serverVersion},
+		"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
+		"serverInfo":      map[string]string{"name": serverName, "version": serverVersion},
 	}
 }
 
-func callTool(ctx context.Context, c *bridge.Client, raw json.RawMessage) (any, error) {
-	var p struct {
+func toolDefinitions() []map[string]any {
+	stringProperty := func(description string) map[string]any {
+		return map[string]any{"type": "string", "description": description}
+	}
+	return []map[string]any{
+		{"name": "device_list", "description": "List online devices and their capabilities. Probe registered workers before returning.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
+		{"name": "device_exec", "description": "Execute a command on a device workspace and return stdout, stderr and exit status.", "inputSchema": map[string]any{
+			"type": "object", "additionalProperties": false,
+			"properties": map[string]any{
+				"device_id": stringProperty("Registered device ID."), "command": stringProperty("Native shell command."), "working_dir": stringProperty("Workspace-relative working directory."),
+				"env": map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")}, "timeout_ms": map[string]any{"type": "integer", "minimum": 1, "description": "Execution timeout in milliseconds."},
+			}, "required": []string{"device_id", "command"},
+		}},
+		{"name": "device_sync", "description": "Synchronize files from the control workspace or explicit file entries to a device.", "inputSchema": map[string]any{
+			"type": "object", "additionalProperties": false, "properties": map[string]any{
+				"device_id": stringProperty("Registered device ID."), "root": stringProperty("Remote workspace-relative root."), "source_path": stringProperty("Local directory to walk and upload."),
+				"files": map[string]any{"type": "array", "description": "Explicit files when source_path is omitted.", "items": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"path": stringProperty("Workspace-relative file path."), "content_base64": stringProperty("File content encoded as base64.")}, "required": []string{"path", "content_base64"}}},
+			}, "required": []string{"device_id"},
+		}},
+		{"name": "device_pull", "description": "Read remote files or test results from a device workspace.", "inputSchema": map[string]any{
+			"type": "object", "additionalProperties": false, "properties": map[string]any{"device_id": stringProperty("Registered device ID."), "path": stringProperty("One remote workspace-relative file path."), "paths": map[string]any{"type": "array", "items": stringProperty("Remote file path.")}}, "required": []string{"device_id"},
+		}},
+		{"name": "device_task", "description": "Start, list, query, cancel, or retrieve an asynchronous device task.", "inputSchema": map[string]any{
+			"type": "object", "additionalProperties": false, "properties": map[string]any{
+				"action": map[string]any{"type": "string", "enum": []string{"start", "list", "get", "cancel", "retrieve"}}, "device_id": stringProperty("Registered device ID."), "task_id": stringProperty("Task ID for get, cancel, or retrieve."), "command": stringProperty("Command for start."), "working_dir": stringProperty("Workspace-relative working directory."), "env": map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")}, "timeout_ms": map[string]any{"type": "integer", "minimum": 1},
+			}, "required": []string{"device_id", "action"},
+		}},
+		{"name": "device_session", "description": "Create, list, poll, send input to, or close a persistent shell session. Output is cumulative; send returns immediately, so poll get for new output. This is a pipe-based shell, not a PTY.", "inputSchema": map[string]any{
+			"type": "object", "additionalProperties": false, "properties": map[string]any{
+				"action":    map[string]any{"type": "string", "enum": []string{"create", "list", "get", "send", "close"}},
+				"device_id": stringProperty("Registered device ID."), "session_id": stringProperty("Session ID for get, send, or close."),
+				"command": stringProperty("Optional initial shell command for create."), "working_dir": stringProperty("Workspace-relative working directory for create."),
+				"env":   map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")},
+				"input": stringProperty("Exact stdin text for send. Include a newline to execute a shell command; multiline PowerShell blocks need a final blank line."),
+			}, "required": []string{"device_id", "action"},
+		}},
+	}
+}
+
+func callTool(ctx context.Context, client *bridge.Client, raw json.RawMessage) (any, error) {
+	var call struct {
 		Name      string         `json:"name"`
 		Arguments map[string]any `json:"arguments"`
 	}
-	if err := json.Unmarshal(raw, &p); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&call); err != nil {
 		return nil, err
 	}
-	switch p.Name {
-	case "list_devices":
-		d, err := c.Devices(ctx)
-		return map[string]any{"content": []any{map[string]any{"type": "text", "text": mustJSON(d)}}}, err
-	case "exec":
-		id, _ := p.Arguments["device_id"].(string)
-		command, _ := p.Arguments["command"].(string)
-		dir, _ := p.Arguments["working_dir"].(string)
-		if strings.TrimSpace(id) == "" || strings.TrimSpace(command) == "" {
-			return nil, fmt.Errorf("exec requires device_id and command")
+	if call.Arguments == nil {
+		call.Arguments = map[string]any{}
+	}
+	if value, exists := call.Arguments["env"]; exists {
+		values, ok := value.(map[string]any)
+		if !ok {
+			return nil, errors.New("env must be an object of string values")
 		}
-		result, err := c.Exec(ctx, id, protocol.ExecRequest{Command: command, WorkingDir: dir})
-		return map[string]any{"content": []any{map[string]any{"type": "text", "text": mustJSON(result)}}}, err
-	case "sync_files":
-		id, _ := p.Arguments["device_id"].(string)
-		if strings.TrimSpace(id) == "" {
-			return nil, fmt.Errorf("sync_files requires device_id")
-		}
-		root, _ := p.Arguments["root"].(string)
-		rawFiles, _ := json.Marshal(p.Arguments["files"])
-		var files []protocol.FileEntry
-		if err := json.Unmarshal(rawFiles, &files); err != nil {
-			return nil, err
-		}
-		for i := range files {
-			if _, err := base64.StdEncoding.DecodeString(files[i].ContentBase64); err != nil {
-				return nil, fmt.Errorf("files[%d] content_base64: %w", i, err)
+		for key, item := range values {
+			if _, ok := item.(string); !ok {
+				return nil, fmt.Errorf("env.%s must be a string", key)
 			}
 		}
-		result, err := c.Sync(ctx, id, protocol.SyncRequest{Root: root, Files: files})
-		return map[string]any{"content": []any{map[string]any{"type": "text", "text": mustJSON(result)}}}, err
+	}
+	switch call.Name {
+	case "device_list":
+		devices, err := client.Devices(ctx)
+		online := make([]protocol.Device, 0, len(devices))
+		for _, device := range devices {
+			if device.Online {
+				online = append(online, device)
+			}
+		}
+		return toolJSON(online), err
+	case "device_exec":
+		id, err := requiredString(call.Arguments, "device_id")
+		if err != nil {
+			return nil, err
+		}
+		command, err := requiredString(call.Arguments, "command")
+		if err != nil {
+			return nil, err
+		}
+		req := protocol.ExecRequest{Command: command, WorkingDir: optionalString(call.Arguments, "working_dir"), Env: stringMap(call.Arguments["env"])}
+		req.TimeoutMS, err = optionalInt64(call.Arguments, "timeout_ms")
+		if err != nil {
+			return nil, err
+		}
+		result, err := client.Exec(ctx, id, req)
+		return toolJSON(result), err
+	case "device_sync":
+		id, err := requiredString(call.Arguments, "device_id")
+		if err != nil {
+			return nil, err
+		}
+		files, err := syncFiles(call.Arguments)
+		if err != nil {
+			return nil, err
+		}
+		result, err := client.Sync(ctx, id, protocol.SyncRequest{Root: optionalString(call.Arguments, "root"), Files: files})
+		return toolJSON(result), err
+	case "device_pull":
+		id, err := requiredString(call.Arguments, "device_id")
+		if err != nil {
+			return nil, err
+		}
+		paths := stringSlice(call.Arguments["paths"])
+		if path := optionalString(call.Arguments, "path"); path != "" {
+			paths = append(paths, path)
+		}
+		if len(paths) == 0 {
+			return nil, errors.New("device_pull requires path or paths")
+		}
+		files := make([]protocol.ReadResponse, 0, len(paths))
+		for _, path := range paths {
+			file, readErr := client.ReadFile(ctx, id, path)
+			if readErr != nil {
+				return nil, readErr
+			}
+			files = append(files, file)
+		}
+		return toolJSON(files), nil
+	case "device_task":
+		return callTask(ctx, client, call.Arguments)
+	case "device_session":
+		return callSession(ctx, client, call.Arguments)
 	default:
-		return nil, fmt.Errorf("unknown tool: %s", p.Name)
+		return nil, fmt.Errorf("unknown tool: %s", call.Name)
 	}
 }
-func mustJSON(v any) string { data, _ := json.Marshal(v); return strings.TrimSpace(string(data)) }
+
+func callTask(ctx context.Context, client *bridge.Client, args map[string]any) (any, error) {
+	id, err := requiredString(args, "device_id")
+	if err != nil {
+		return nil, err
+	}
+	action := optionalString(args, "action")
+	if action == "" {
+		return nil, errors.New("device_task requires action")
+	}
+	switch action {
+	case "start":
+		command, commandErr := requiredString(args, "command")
+		if commandErr != nil {
+			return nil, commandErr
+		}
+		timeout, timeoutErr := optionalInt64(args, "timeout_ms")
+		if timeoutErr != nil {
+			return nil, timeoutErr
+		}
+		task, taskErr := client.StartTask(ctx, id, protocol.TaskRequest{ExecRequest: protocol.ExecRequest{Command: command, WorkingDir: optionalString(args, "working_dir"), Env: stringMap(args["env"]), TimeoutMS: timeout}})
+		return toolJSON(task), taskErr
+	case "list":
+		tasks, listErr := client.ListTasks(ctx, id)
+		return toolJSON(tasks), listErr
+	case "get", "retrieve":
+		taskID, taskErr := requiredString(args, "task_id")
+		if taskErr != nil {
+			return nil, taskErr
+		}
+		task, getErr := client.GetTask(ctx, id, taskID)
+		return toolJSON(task), getErr
+	case "cancel":
+		taskID, taskErr := requiredString(args, "task_id")
+		if taskErr != nil {
+			return nil, taskErr
+		}
+		if cancelErr := client.CancelTask(ctx, id, taskID); cancelErr != nil {
+			return nil, cancelErr
+		}
+		task, getErr := client.GetTask(ctx, id, taskID)
+		return toolJSON(task), getErr
+	default:
+		return nil, fmt.Errorf("unsupported device_task action: %s", action)
+	}
+}
+
+func callSession(ctx context.Context, client *bridge.Client, args map[string]any) (any, error) {
+	id, err := requiredString(args, "device_id")
+	if err != nil {
+		return nil, err
+	}
+	action, err := requiredString(args, "action")
+	if err != nil {
+		return nil, err
+	}
+	switch action {
+	case "create":
+		result, err := client.CreateSession(ctx, id, protocol.SessionRequest{Command: optionalString(args, "command"), WorkingDir: optionalString(args, "working_dir"), Env: stringMap(args["env"])})
+		return toolJSON(result), err
+	case "list":
+		result, err := client.ListSessions(ctx, id)
+		return toolJSON(result), err
+	case "get", "send", "close":
+		sessionID, err := requiredString(args, "session_id")
+		if err != nil {
+			return nil, err
+		}
+		var result protocol.Session
+		switch action {
+		case "get":
+			result, err = client.GetSession(ctx, id, sessionID)
+		case "close":
+			result, err = client.CloseSession(ctx, id, sessionID)
+		case "send":
+			input, ok := args["input"].(string)
+			if !ok {
+				return nil, errors.New("input must be a string")
+			}
+			result, err = client.WriteSession(ctx, id, sessionID, input)
+		}
+		return toolJSON(result), err
+	default:
+		return nil, fmt.Errorf("unsupported device_session action: %s", action)
+	}
+}
+
+func syncFiles(args map[string]any) ([]protocol.FileEntry, error) {
+	if source := optionalString(args, "source_path"); source != "" {
+		return collectFiles(source)
+	}
+	raw, ok := args["files"]
+	if !ok {
+		return nil, errors.New("device_sync requires source_path or files")
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, err
+	}
+	var files []protocol.FileEntry
+	if err := json.Unmarshal(data, &files); err != nil {
+		return nil, fmt.Errorf("files must contain path and content_base64: %w", err)
+	}
+	for i := range files {
+		if _, err := base64.StdEncoding.DecodeString(files[i].ContentBase64); err != nil {
+			return nil, fmt.Errorf("files[%d] content_base64: %w", i, err)
+		}
+	}
+	return files, nil
+}
+
+func collectFiles(source string) ([]protocol.FileEntry, error) {
+	info, err := os.Stat(source)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, errors.New("source_path must be a directory")
+	}
+	files := make([]protocol.FileEntry, 0)
+	err = filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		files = append(files, protocol.FileEntry{Path: filepath.ToSlash(rel), ContentBase64: base64.StdEncoding.EncodeToString(data)})
+		return nil
+	})
+	return files, err
+}
+
+func requiredString(args map[string]any, key string) (string, error) {
+	value := optionalString(args, key)
+	if value == "" {
+		return "", fmt.Errorf("%s is required", key)
+	}
+	return value, nil
+}
+func optionalString(args map[string]any, key string) string {
+	value, _ := args[key].(string)
+	return strings.TrimSpace(value)
+}
+func optionalInt64(args map[string]any, key string) (int64, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return 0, nil
+	}
+	switch number := value.(type) {
+	case float64:
+		if number < 1 || number != float64(int64(number)) {
+			return 0, fmt.Errorf("%s must be a positive integer", key)
+		}
+		return int64(number), nil
+	case json.Number:
+		parsed, err := number.Int64()
+		if err != nil || parsed < 1 || parsed > (1<<63-1)/1000000 {
+			return 0, fmt.Errorf("%s must be a positive integer", key)
+		}
+		return parsed, nil
+	default:
+		return 0, fmt.Errorf("%s must be a positive integer", key)
+	}
+}
+func stringMap(value any) map[string]string {
+	result := map[string]string{}
+	values, ok := value.(map[string]any)
+	if !ok {
+		return result
+	}
+	for key, item := range values {
+		if text, ok := item.(string); ok {
+			result[key] = text
+		}
+	}
+	return result
+}
+func stringSlice(value any) []string {
+	values, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]string, 0, len(values))
+	for _, item := range values {
+		if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+			result = append(result, text)
+		}
+	}
+	return result
+}
+func toolJSON(value any) map[string]any {
+	return map[string]any{"content": []any{map[string]any{"type": "text", "text": mustJSON(value)}}}
+}
+func toolError(err error) map[string]any {
+	return map[string]any{"content": []any{map[string]any{"type": "text", "text": err.Error()}}, "isError": true}
+}
+func mustJSON(value any) string {
+	data, _ := json.Marshal(value)
+	return strings.TrimSpace(string(data))
+}

@@ -34,6 +34,7 @@ type Server struct {
 	cfg       Config
 	startedAt time.Time
 	tasks     *taskStore
+	sessions  *sessionStore
 }
 
 func New(cfg Config) (*Server, error) {
@@ -53,20 +54,16 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Name == "" {
 		cfg.Name, _ = os.Hostname()
 	}
-	return &Server{cfg: Config{ListenAddr: cfg.ListenAddr, Workspace: root, Name: cfg.Name}, startedAt: time.Now(), tasks: newTaskStore()}, nil
+	return &Server{cfg: Config{ListenAddr: cfg.ListenAddr, Workspace: root, Name: cfg.Name}, startedAt: time.Now(), tasks: newTaskStore(), sessions: newSessionStore()}, nil
 }
 
 func (s *Server) Device() protocol.Device {
 	host, _ := os.Hostname()
 	sum := sha256.Sum256([]byte(host + "|" + s.cfg.Workspace))
-	shell := "sh"
-	if runtime.GOOS == "windows" {
-		shell = "powershell"
-	}
 	return protocol.Device{
 		ID: runtime.GOOS + "-" + hex.EncodeToString(sum[:])[:16], Name: s.cfg.Name, OS: runtime.GOOS,
-		Architecture: runtime.GOARCH, Capabilities: protocol.Capabilities{Exec: true, Files: true, Tasks: true, Shells: []string{shell}, MaxPayload: 32 << 20},
-		Metadata: map[string]string{"hostname": host, "workspace": s.cfg.Workspace}, LastSeen: time.Now(),
+		Architecture: runtime.GOARCH, Capabilities: protocol.Capabilities{Exec: true, Files: true, Tasks: true, Sessions: true, Shells: []string{nativeShell}, MaxPayload: 32 << 20},
+		Metadata: map[string]string{"hostname": host, "workspace": s.cfg.Workspace}, LastSeen: time.Now(), Online: true,
 	}
 }
 
@@ -79,6 +76,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/files/read", s.readFile)
 	mux.HandleFunc("/v1/tasks", s.tasksRoot)
 	mux.HandleFunc("/v1/tasks/", s.taskByID)
+	mux.HandleFunc("/v1/sessions", s.sessionsRoot)
+	mux.HandleFunc("/v1/sessions/", s.sessionByID)
 	return withJSONHeaders(mux)
 }
 
@@ -122,6 +121,9 @@ func (s *Server) run(parent context.Context, req protocol.ExecRequest) (*protoco
 	if strings.TrimSpace(req.Command) == "" {
 		return nil, errors.New("command is required")
 	}
+	if req.TimeoutMS < 0 || req.TimeoutMS > (1<<63-1)/int64(time.Millisecond) {
+		return nil, errors.New("timeout_ms is outside the supported duration range")
+	}
 	workDir, err := pathutil.ResolveUnderRoot(s.cfg.Workspace, req.WorkingDir)
 	if err != nil {
 		return nil, err
@@ -136,12 +138,8 @@ func (s *Server) run(parent context.Context, req protocol.ExecRequest) (*protoco
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	start := time.Now()
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", req.Command)
-	} else {
-		cmd = exec.CommandContext(ctx, "sh", "-c", req.Command)
-	}
+	cmd := shellCommand(ctx, req.Command, false)
+	cmd.WaitDelay = 2 * time.Second
 	cmd.Dir = workDir
 	cmd.Env = os.Environ()
 	for k, v := range req.Env {
@@ -286,14 +284,17 @@ func (t *taskStore) start(req protocol.ExecRequest, run func(context.Context, pr
 	t.mu.Lock()
 	t.values[id] = task
 	t.cancels[id] = cancel
+	initial := *task
 	t.mu.Unlock()
 	go func() {
+		defer cancel()
 		result, err := run(ctx, req)
 		now := time.Now()
 		t.mu.Lock()
 		defer t.mu.Unlock()
 		delete(t.cancels, id)
 		task.FinishedAt = &now
+		task.Result = result
 		if task.Status == "cancelled" {
 			return
 		}
@@ -302,23 +303,30 @@ func (t *taskStore) start(req protocol.ExecRequest, run func(context.Context, pr
 			task.Error = err.Error()
 		} else {
 			task.Status = "completed"
-			task.Result = result
+			if result != nil && (result.ExitCode != 0 || result.TimedOut) {
+				task.Status = "failed"
+			}
 		}
 	}()
-	return task
+	return &initial
 }
 func (t *taskStore) get(id string) (*protocol.Task, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	v, ok := t.values[id]
-	return v, ok
+	if !ok {
+		return nil, false
+	}
+	copy := *v
+	return &copy, true
 }
 func (t *taskStore) list() []*protocol.Task {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	out := make([]*protocol.Task, 0, len(t.values))
 	for _, v := range t.values {
-		out = append(out, v)
+		copy := *v
+		out = append(out, &copy)
 	}
 	return out
 }

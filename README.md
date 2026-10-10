@@ -14,7 +14,7 @@ Coding Agent -- MCP stdio or CLI --> Bridge (:8764)
                          workspace-scoped files and shell
 ```
 
-The shared contract is in `internal/protocol`. The Bridge keeps the registered device catalog in memory and proxies calls. The Worker exposes the same API regardless of the transport and selects a native command runner at runtime. On Windows it runs PowerShell (`powershell.exe`); the shared service also has a POSIX shell fallback for development and future workers. A worker workspace is the boundary for all remote file paths and working directories.
+The shared contract is in `internal/protocol`. The Bridge keeps the registered device catalog in memory and proxies calls. The Worker exposes the same API regardless of the transport. Platform shell launch and process cleanup are isolated in `internal/worker/shell_windows.go` and `shell_other.go`; Windows PowerShell is the currently tested target, and the POSIX fallback is experimental. Windows cancellation and session close terminate the shell's process tree. A worker workspace is the boundary for all remote file paths and working directories.
 
 The current registration flow is intentionally explicit: the operator starts a Worker, then adds its HTTP URL to the Bridge. Discovery, pairing, authentication, persistence, incremental sync and multi-device scheduling are later layers over this contract.
 
@@ -91,7 +91,27 @@ The same adapter can also be started directly:
 AgentRelay-mcp --bridge http://127.0.0.1:8764
 ```
 
-It exposes `list_devices`, `exec`, and `sync_files`. `sync_files` accepts file entries with `path` and base64 `content_base64`, allowing an agent integration to reuse the same Bridge API without a second transport protocol. The adapter uses newline-delimited JSON-RPC messages on stdin/stdout, as required by MCP stdio transport.
+It exposes these Agent tools:
+
+- `device_list`: probe registered workers and list online devices with their capabilities. The HTTP/CLI catalog also retains offline entries with `online: false` and the last successful `last_seen` timestamp.
+- `device_exec`: execute a command with `working_dir`, `env`, and `timeout_ms`.
+- `device_sync`: upload a local `source_path` or explicit base64 file entries.
+- `device_pull`: read one or more remote workspace files and test results.
+- `device_task`: start, list, query, retrieve, or cancel asynchronous tasks.
+- `device_session`: create, list, poll, send input to, or close a persistent shell session. Session output is cumulative and is returned by `get`/`send`.
+
+The adapter uses newline-delimited JSON-RPC messages on stdin/stdout, as required by MCP stdio transport. Sessions use a pipe-based native shell (`powershell` on Windows) and are intended for long-running commands and incremental stdin input; they do not provide terminal resize, ANSI/PTY semantics, or interactive password prompts.
+
+Example `tools/call` arguments for sessions:
+
+```json
+{"name":"device_session","arguments":{"device_id":"<device-id>","action":"create","working_dir":"project"}}
+{"name":"device_session","arguments":{"device_id":"<device-id>","action":"send","session_id":"session-1","input":"Write-Output 'hello'\r\n"}}
+{"name":"device_session","arguments":{"device_id":"<device-id>","action":"get","session_id":"session-1"}}
+{"name":"device_session","arguments":{"device_id":"<device-id>","action":"close","session_id":"session-1"}}
+```
+
+`send` returns after writing stdin; poll `get` for subsequent output. Input is preserved exactly, including whitespace and newlines. Multiline PowerShell blocks need a final blank line. Each output stream retains up to 4 MiB; `output_truncated` reports discarded excess. Task `retrieve` returns the execution result without deleting it; use `device_pull` for generated files (returned as base64). Task and session records survive MCP client disconnection but are held in Worker memory and do not survive Worker restart.
 
 ## API surface (v1)
 
@@ -101,6 +121,7 @@ Worker endpoints:
 - `POST /v1/exec`
 - `POST /v1/files/sync`, `GET /v1/files/read?path=...`
 - `POST /v1/tasks`, `GET /v1/tasks`, `GET/DELETE /v1/tasks/{id}`
+- `POST/GET /v1/sessions`, `GET/DELETE /v1/sessions/{id}`, `POST /v1/sessions/{id}/input`
 
 Bridge endpoints mirror Worker execution endpoints under `/v1/devices/{device-id}/...`, with `GET/POST /v1/devices` for the in-memory catalog.
 

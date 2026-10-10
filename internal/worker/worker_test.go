@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"AgentRelay/internal/protocol"
 )
@@ -64,5 +65,73 @@ func TestWorkerExecSyncAndPathBoundary(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("traversal status = %d", resp.StatusCode)
+	}
+}
+
+func TestWorkerSessionLifecycle(t *testing.T) {
+	s, err := New(Config{Workspace: t.TempDir(), Name: "session-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(s.Handler())
+	defer server.Close()
+	client := &http.Client{}
+	post := func(path string, value any) protocol.Session {
+		data, _ := json.Marshal(value)
+		resp, err := client.Post(server.URL+path, "application/json", strings.NewReader(string(data)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			t.Fatalf("status %d", resp.StatusCode)
+		}
+		var out protocol.Session
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	session := post("/v1/sessions", protocol.SessionRequest{})
+	defer s.sessions.close(session.ID)
+	if session.ID == "" || session.Status != "running" {
+		t.Fatalf("session = %+v", session)
+	}
+	input := protocol.SessionInput{Input: "Write-Output AgentRelay-session-ok\r\n"}
+	data, _ := json.Marshal(input)
+	resp, err := client.Post(server.URL+"/v1/sessions/"+session.ID+"/input", "application/json", strings.NewReader(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("input status = %d", resp.StatusCode)
+	}
+	found := false
+	for i := 0; i < 200; i++ {
+		resp, err = client.Get(server.URL + "/v1/sessions/" + session.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var current protocol.Session
+		_ = json.NewDecoder(resp.Body).Decode(&current)
+		resp.Body.Close()
+		if strings.Contains(current.Stdout, "AgentRelay-session-ok") {
+			found = true
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !found {
+		t.Fatal("session output was not returned")
+	}
+	req, _ := http.NewRequest(http.MethodDelete, server.URL+"/v1/sessions/"+session.ID, nil)
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("close status = %d", resp.StatusCode)
 	}
 }
