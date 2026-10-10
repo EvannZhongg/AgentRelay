@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -145,7 +144,7 @@ func (s *Server) run(parent context.Context, req protocol.ExecRequest) (*protoco
 	for k, v := range req.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr limitedOutput
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	runErr := cmd.Run()
 	timedOut := ctx.Err() == context.DeadlineExceeded
@@ -157,7 +156,13 @@ func (s *Server) run(parent context.Context, req protocol.ExecRequest) (*protoco
 			exitCode = exitErr.ExitCode()
 		}
 	}
-	return &protocol.ExecResponse{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: exitCode, DurationMS: time.Since(start).Milliseconds(), TimedOut: timedOut}, nil
+	if runErr != nil && !timedOut && ctx.Err() == nil {
+		var exitErr *exec.ExitError
+		if !errors.As(runErr, &exitErr) {
+			return nil, runErr
+		}
+	}
+	return &protocol.ExecResponse{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: exitCode, DurationMS: time.Since(start).Milliseconds(), TimedOut: timedOut, OutputTruncated: stdout.truncated || stderr.truncated}, nil
 }
 
 func (s *Server) syncFiles(w http.ResponseWriter, r *http.Request) {
@@ -232,9 +237,13 @@ func (s *Server) tasksRoot(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		task := s.tasks.start(req.ExecRequest, func(ctx context.Context, req protocol.ExecRequest) (*protocol.ExecResponse, error) {
+		task, err := s.tasks.start(req.ExecRequest, func(ctx context.Context, req protocol.ExecRequest) (*protocol.ExecResponse, error) {
 			return s.run(ctx, req)
 		})
+		if err != nil {
+			writeError(w, http.StatusConflict, err)
+			return
+		}
 		writeJSON(w, http.StatusAccepted, task)
 		return
 	}
@@ -247,6 +256,19 @@ func (s *Server) tasksRoot(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) taskByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/v1/tasks/")
+	if strings.HasSuffix(id, "/retrieve") && r.Method == http.MethodPost {
+		task, err := s.tasks.retrieve(strings.TrimSuffix(id, "/retrieve"))
+		if err != nil {
+			status := http.StatusConflict
+			if errors.Is(err, errTaskNotFound) {
+				status = http.StatusNotFound
+			}
+			writeError(w, status, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, task)
+		return
+	}
 	if r.Method == http.MethodGet {
 		task, ok := s.tasks.get(id)
 		if !ok {
@@ -277,11 +299,17 @@ type taskStore struct {
 func newTaskStore() *taskStore {
 	return &taskStore{values: map[string]*protocol.Task{}, cancels: map[string]context.CancelFunc{}}
 }
-func (t *taskStore) start(req protocol.ExecRequest, run func(context.Context, protocol.ExecRequest) (*protocol.ExecResponse, error)) *protocol.Task {
+func (t *taskStore) start(req protocol.ExecRequest, run func(context.Context, protocol.ExecRequest) (*protocol.ExecResponse, error)) (*protocol.Task, error) {
 	id := fmt.Sprintf("task-%d", atomic.AddUint64(&t.next, 1))
 	task := &protocol.Task{ID: id, Status: "running", Command: req.Command, StartedAt: time.Now()}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.mu.Lock()
+	t.pruneLocked(time.Now(), storeRecordLimit-1)
+	if len(t.values) >= storeRecordLimit {
+		t.mu.Unlock()
+		cancel()
+		return nil, fmt.Errorf("%w; cancel existing tasks", errStoreCapacity)
+	}
 	t.values[id] = task
 	t.cancels[id] = cancel
 	initial := *task
@@ -292,6 +320,7 @@ func (t *taskStore) start(req protocol.ExecRequest, run func(context.Context, pr
 		now := time.Now()
 		t.mu.Lock()
 		defer t.mu.Unlock()
+		defer t.pruneLocked(now, storeRecordLimit)
 		delete(t.cancels, id)
 		task.FinishedAt = &now
 		task.Result = result
@@ -305,14 +334,20 @@ func (t *taskStore) start(req protocol.ExecRequest, run func(context.Context, pr
 			task.Status = "completed"
 			if result != nil && (result.ExitCode != 0 || result.TimedOut) {
 				task.Status = "failed"
+				if result.TimedOut {
+					task.Error = "execution timed out"
+				} else {
+					task.Error = fmt.Sprintf("command exited with code %d", result.ExitCode)
+				}
 			}
 		}
 	}()
-	return &initial
+	return &initial, nil
 }
 func (t *taskStore) get(id string) (*protocol.Task, bool) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.pruneLocked(time.Now(), storeRecordLimit)
 	v, ok := t.values[id]
 	if !ok {
 		return nil, false
@@ -321,8 +356,9 @@ func (t *taskStore) get(id string) (*protocol.Task, bool) {
 	return &copy, true
 }
 func (t *taskStore) list() []*protocol.Task {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.pruneLocked(time.Now(), storeRecordLimit)
 	out := make([]*protocol.Task, 0, len(t.values))
 	for _, v := range t.values {
 		copy := *v
@@ -333,6 +369,7 @@ func (t *taskStore) list() []*protocol.Task {
 func (t *taskStore) cancel(id string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.pruneLocked(time.Now(), storeRecordLimit)
 	task, ok := t.values[id]
 	if !ok {
 		return false
@@ -342,6 +379,36 @@ func (t *taskStore) cancel(id string) bool {
 		task.Status = "cancelled"
 	}
 	return true
+}
+
+var errTaskNotFound = errors.New("task not found")
+
+func (t *taskStore) retrieve(id string) (*protocol.Task, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.pruneLocked(time.Now(), storeRecordLimit)
+	task, ok := t.values[id]
+	if !ok {
+		return nil, errTaskNotFound
+	}
+	if task.FinishedAt == nil {
+		return nil, errors.New("task is still running; use get to poll before retrieve")
+	}
+	copy := *task
+	delete(t.values, id)
+	return &copy, nil
+}
+
+func (t *taskStore) pruneLocked(now time.Time, limit int) {
+	var records []finishedRecord
+	for id, task := range t.values {
+		if task.FinishedAt != nil {
+			records = append(records, finishedRecord{id, *task.FinishedAt})
+		}
+	}
+	for _, id := range expiredRecords(records, len(t.values), limit, now) {
+		delete(t.values, id)
+	}
 }
 
 func withJSONHeaders(next http.Handler) http.Handler {

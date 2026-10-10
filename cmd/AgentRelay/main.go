@@ -36,6 +36,10 @@ func main() {
 		err = taskCommand(os.Args[2:])
 	case "sync":
 		err = syncCommand(os.Args[2:])
+	case "pull":
+		err = pullCommand(os.Args[2:])
+	case "session":
+		err = sessionCommand(os.Args[2:])
 	case "mcp":
 		err = mcpCommand(os.Args[2:])
 	default:
@@ -131,13 +135,15 @@ func execCommand(args []string) error {
 	id := f.String("device", "", "device ID")
 	dir := f.String("dir", "", "workspace-relative directory")
 	timeout := f.Int64("timeout-ms", 0, "timeout")
+	var env environmentFlags
+	f.Var(&env, "env", "environment override KEY=VALUE (repeatable)")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
 	if *id == "" || f.NArg() == 0 {
 		return errors.New("usage: AgentRelay exec --device <id> [--dir <path>] <command>")
 	}
-	result, err := bridge.NewClient(*base).Exec(context.Background(), *id, protocol.ExecRequest{Command: strings.Join(f.Args(), " "), WorkingDir: *dir, TimeoutMS: *timeout})
+	result, err := bridge.NewClient(*base).Exec(context.Background(), *id, protocol.ExecRequest{Command: strings.Join(f.Args(), " "), WorkingDir: *dir, TimeoutMS: *timeout, Env: env})
 	if err != nil {
 		return err
 	}
@@ -145,12 +151,16 @@ func execCommand(args []string) error {
 }
 func taskCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: AgentRelay task start|get")
+		return errors.New("usage: AgentRelay task start|list|get|retrieve|cancel")
 	}
 	f := flag.NewFlagSet("task", flag.ContinueOnError)
 	base := f.String("bridge", "http://127.0.0.1:8764", "bridge URL")
 	id := f.String("device", "", "device ID")
 	taskID := f.String("id", "", "task ID")
+	dir := f.String("dir", "", "workspace-relative directory for start")
+	timeout := f.Int64("timeout-ms", 0, "execution timeout for start")
+	var env environmentFlags
+	f.Var(&env, "env", "environment override KEY=VALUE (repeatable)")
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -163,16 +173,33 @@ func taskCommand(args []string) error {
 		if f.NArg() == 0 {
 			return errors.New("task start requires a command")
 		}
-		task, err := c.StartTask(context.Background(), *id, protocol.TaskRequest{ExecRequest: protocol.ExecRequest{Command: strings.Join(f.Args(), " ")}})
+		task, err := c.StartTask(context.Background(), *id, protocol.TaskRequest{ExecRequest: protocol.ExecRequest{Command: strings.Join(f.Args(), " "), WorkingDir: *dir, Env: env, TimeoutMS: *timeout}})
 		if err != nil {
 			return err
 		}
 		return printJSON(task)
-	case "get":
-		if *taskID == "" {
-			return errors.New("task get requires --id")
+	case "list":
+		tasks, err := c.ListTasks(context.Background(), *id)
+		if err != nil {
+			return err
 		}
-		task, err := c.GetTask(context.Background(), *id, *taskID)
+		return printJSON(tasks)
+	case "get", "retrieve", "cancel":
+		if *taskID == "" {
+			return fmt.Errorf("task %s requires --id", args[0])
+		}
+		if args[0] == "cancel" {
+			if err := c.CancelTask(context.Background(), *id, *taskID); err != nil {
+				return err
+			}
+		}
+		var task protocol.Task
+		var err error
+		if args[0] == "retrieve" {
+			task, err = c.RetrieveTask(context.Background(), *id, *taskID)
+		} else {
+			task, err = c.GetTask(context.Background(), *id, *taskID)
+		}
 		if err != nil {
 			return err
 		}
@@ -275,5 +302,5 @@ func printJSON(v any) error {
 	return err
 }
 func usage() {
-	fmt.Println("AgentRelay\n\nUsage:\n  AgentRelay worker serve --workspace <dir>\n  AgentRelay bridge serve\n  AgentRelay device add --worker http://host:8765\n  AgentRelay device list\n  AgentRelay exec --device <id> <command>\n  AgentRelay task start|get --device <id>\n  AgentRelay sync --device <id> --source <dir>\n  AgentRelay mcp config [--bridge <url>]")
+	fmt.Println("AgentRelay\n\nUsage:\n  AgentRelay worker serve --workspace <dir>\n  AgentRelay bridge serve\n  AgentRelay device add --worker http://host:8765\n  AgentRelay device list\n  AgentRelay exec --device <id> [--env KEY=VALUE] [--timeout-ms N] <command>\n  AgentRelay task start|list|get|retrieve|cancel --device <id> [--id <task-id>]\n  AgentRelay sync --device <id> --source <dir>\n  AgentRelay pull --device <id> [--out <local-dir>] <remote-path>...\n  AgentRelay session create|list|get|send|close --device <id> [--id <session-id>]\n  AgentRelay mcp config [--bridge <url>]")
 }

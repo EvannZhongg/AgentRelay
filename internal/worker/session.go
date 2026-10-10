@@ -17,7 +17,7 @@ import (
 	"AgentRelay/internal/protocol"
 )
 
-const sessionOutputLimit = 4 << 20
+const sessionOutputLimit = outputLimit
 
 type sessionState struct {
 	mu      sync.RWMutex
@@ -47,7 +47,11 @@ func (s *Server) sessionsRoot(w http.ResponseWriter, r *http.Request) {
 		}
 		session, err := s.sessions.start(s.cfg.Workspace, req)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
+			status := http.StatusBadRequest
+			if errors.Is(err, errStoreCapacity) {
+				status = http.StatusConflict
+			}
+			writeError(w, status, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, session)
@@ -115,8 +119,15 @@ func (s *sessionStore) start(workspace string, req protocol.SessionRequest) (pro
 	for key, value := range req.Env {
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
+	s.mu.Lock()
+	s.pruneLocked(time.Now(), storeRecordLimit-1)
+	if len(s.values) >= storeRecordLimit {
+		s.mu.Unlock()
+		return protocol.Session{}, fmt.Errorf("%w; close existing sessions", errStoreCapacity)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		s.mu.Unlock()
 		return protocol.Session{}, err
 	}
 	id := fmt.Sprintf("session-%d", atomic.AddUint64(&s.next, 1))
@@ -125,10 +136,10 @@ func (s *sessionStore) start(workspace string, req protocol.SessionRequest) (pro
 	cmd.Stderr = sessionOutput{state: state, stderr: true}
 	cmd.WaitDelay = 2 * time.Second
 	if err := cmd.Start(); err != nil {
+		s.mu.Unlock()
 		_ = stdin.Close()
 		return protocol.Session{}, err
 	}
-	s.mu.Lock()
 	s.values[id] = state
 	s.mu.Unlock()
 	if shellPreamble != "" || strings.TrimSpace(req.Command) != "" {
@@ -228,8 +239,9 @@ func (s *sessionStore) close(id string) bool {
 	return true
 }
 func (s *sessionStore) state(id string) (*sessionState, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneLocked(time.Now(), storeRecordLimit)
 	value, ok := s.values[id]
 	return value, ok
 }
@@ -242,17 +254,34 @@ func (s *sessionStore) get(id string) (protocol.Session, bool) {
 }
 func (s *sessionStore) getOrError(id string) protocol.Session { value, _ := s.get(id); return value }
 func (s *sessionStore) list() []protocol.Session {
-	s.mu.RLock()
+	s.mu.Lock()
+	s.pruneLocked(time.Now(), storeRecordLimit)
 	values := make([]*sessionState, 0, len(s.values))
 	for _, state := range s.values {
 		values = append(values, state)
 	}
-	s.mu.RUnlock()
+	s.mu.Unlock()
 	result := make([]protocol.Session, 0, len(values))
 	for _, state := range values {
 		result = append(result, state.snapshot())
 	}
 	return result
+}
+
+func (s *sessionStore) pruneLocked(now time.Time, limit int) {
+	var records []finishedRecord
+	for id, state := range s.values {
+		select {
+		case <-state.done:
+			if session := state.snapshot(); session.FinishedAt != nil {
+				records = append(records, finishedRecord{id, *session.FinishedAt})
+			}
+		default:
+		}
+	}
+	for _, id := range expiredRecords(records, len(s.values), limit, now) {
+		delete(s.values, id)
+	}
 }
 func (state *sessionState) snapshot() protocol.Session {
 	state.mu.RLock()

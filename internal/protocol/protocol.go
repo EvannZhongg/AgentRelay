@@ -40,11 +40,12 @@ type ExecRequest struct {
 }
 
 type ExecResponse struct {
-	Stdout     string `json:"stdout"`
-	Stderr     string `json:"stderr"`
-	ExitCode   int    `json:"exit_code"`
-	DurationMS int64  `json:"duration_ms"`
-	TimedOut   bool   `json:"timed_out,omitempty"`
+	OutputTruncated bool   `json:"output_truncated,omitempty"`
+	Stdout          string `json:"stdout"`
+	Stderr          string `json:"stderr"`
+	ExitCode        int    `json:"exit_code"`
+	DurationMS      int64  `json:"duration_ms"`
+	TimedOut        bool   `json:"timed_out,omitempty"`
 }
 
 type FileEntry struct {

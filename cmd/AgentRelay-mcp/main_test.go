@@ -110,7 +110,7 @@ func TestMCPDevelopmentWorkflow(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for task.FinishedAt == nil && time.Now().Before(deadline) {
 		time.Sleep(25 * time.Millisecond)
-		call("device_task", map[string]any{"action": "retrieve", "task_id": task.ID}, &task)
+		call("device_task", map[string]any{"action": "get", "task_id": task.ID}, &task)
 	}
 	if task.Status != "completed" || task.Result == nil || !strings.Contains(task.Result.Stdout, "task-env-ok") {
 		t.Fatalf("task = %+v", task)
@@ -119,6 +119,17 @@ func TestMCPDevelopmentWorkflow(t *testing.T) {
 	call("device_task", map[string]any{"action": "list"}, &tasks)
 	if len(tasks) != 1 || tasks[0].ID != task.ID {
 		t.Fatalf("tasks = %+v", tasks)
+	}
+	call("device_task", map[string]any{"action": "retrieve", "task_id": task.ID}, &task)
+	if task.Result == nil || task.Status != "completed" {
+		t.Fatalf("retrieved = %+v", task)
+	}
+	if _, err := client.GetTask(ctx, device.ID, task.ID); err == nil {
+		t.Fatal("retrieved task was retained")
+	}
+	call("device_task", map[string]any{"action": "list"}, &tasks)
+	if len(tasks) != 0 {
+		t.Fatalf("retrieved task still listed: %+v", tasks)
 	}
 	var files []protocol.ReadResponse
 	call("device_pull", map[string]any{"path": "project/report.txt"}, &files)
@@ -175,8 +186,8 @@ func TestMCPDevelopmentWorkflow(t *testing.T) {
 	}
 	ws.Close()
 	call("device_list", map[string]any{}, &devices)
-	if len(devices) != 0 {
-		t.Fatalf("offline worker was listed: %+v", devices)
+	if len(devices) != 1 || devices[0].ID != device.ID || devices[0].Online || devices[0].LastSeen.IsZero() {
+		t.Fatalf("offline worker missing from catalog: %+v", devices)
 	}
 }
 

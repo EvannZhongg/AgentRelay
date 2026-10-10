@@ -272,6 +272,12 @@ func (c *Client) GetTask(ctx context.Context, id, taskID string) (protocol.Task,
 	err := c.Do(ctx, http.MethodGet, "/v1/devices/"+url.PathEscape(id)+"/tasks/"+url.PathEscape(taskID), nil, &out)
 	return out, err
 }
+
+func (c *Client) RetrieveTask(ctx context.Context, id, taskID string) (protocol.Task, error) {
+	var out protocol.Task
+	err := c.Do(ctx, http.MethodPost, "/v1/devices/"+url.PathEscape(id)+"/tasks/"+url.PathEscape(taskID)+"/retrieve", nil, &out)
+	return out, err
+}
 func (c *Client) ListTasks(ctx context.Context, id string) ([]protocol.Task, error) {
 	var out []protocol.Task
 	err := c.Do(ctx, http.MethodGet, "/v1/devices/"+url.PathEscape(id)+"/tasks", nil, &out)

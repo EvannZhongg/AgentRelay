@@ -46,12 +46,31 @@ AgentRelay sync --device <device-id> --source . --remote project
 AgentRelay exec --device <device-id> --dir project "dotnet test"
 ```
 
-The Worker API also supports asynchronous jobs:
+The CLI and MCP adapter support asynchronous jobs with the same lifecycle:
 
 ```powershell
-AgentRelay task start --device <device-id> "npm run build"
+AgentRelay task start --device <device-id> --dir project --env NODE_ENV=test --timeout-ms 60000 "npm run build"
+AgentRelay task list --device <device-id>
 AgentRelay task get --device <device-id> --id task-1
+AgentRelay task retrieve --device <device-id> --id task-1
+AgentRelay task cancel --device <device-id> --id task-2
 ```
+
+`get` queries a task without removing it. `retrieve` atomically returns and deletes a finished task, including failed or cancelled tasks. It returns HTTP 409 while the process is still running or being cancelled, and HTTP 404 once the record is retrieved or expired. Poll `get` until `finished_at` is present before retrieving. Failed tasks include an `error` explaining launch errors, nonzero exit codes, or timeouts; execution details remain in `result`.
+
+Persistent shell sessions and file retrieval are also available from the CLI:
+
+```powershell
+AgentRelay session create --device <device-id> --dir project --env APP_ENV=test
+AgentRelay session list --device <device-id>
+AgentRelay session send --device <device-id> --id session-1 --input "Write-Output 'hello'`r`n"
+AgentRelay session send --device <device-id> --id session-1 --input-file commands.txt
+AgentRelay session get --device <device-id> --id session-1
+AgentRelay session close --device <device-id> --id session-1
+AgentRelay pull --device <device-id> --out .\results project\report.txt project\build.log
+```
+
+`--env KEY=VALUE` is repeatable for `exec`, `task start`, and `session create`. Session input is sent exactly as supplied; `--input-file -` reads stdin. `pull` preserves workspace-relative paths under `--out`; without `--out` it prints base64 JSON. It also accepts `--path` for a single file.
 
 ## MCP
 
@@ -93,7 +112,7 @@ AgentRelay-mcp --bridge http://127.0.0.1:8764
 
 It exposes these Agent tools:
 
-- `device_list`: probe registered workers and list online devices with their capabilities. The HTTP/CLI catalog also retains offline entries with `online: false` and the last successful `last_seen` timestamp.
+- `device_list`: probe and list all registered workers with their capabilities, including offline entries with `online: false` and the last successful `last_seen` timestamp, consistently with the HTTP/CLI catalog.
 - `device_exec`: execute a command with `working_dir`, `env`, and `timeout_ms`.
 - `device_sync`: upload a local `source_path` or explicit base64 file entries.
 - `device_pull`: read one or more remote workspace files and test results.
@@ -111,7 +130,9 @@ Example `tools/call` arguments for sessions:
 {"name":"device_session","arguments":{"device_id":"<device-id>","action":"close","session_id":"session-1"}}
 ```
 
-`send` returns after writing stdin; poll `get` for subsequent output. Input is preserved exactly, including whitespace and newlines. Multiline PowerShell blocks need a final blank line. Each output stream retains up to 4 MiB; `output_truncated` reports discarded excess. Task `retrieve` returns the execution result without deleting it; use `device_pull` for generated files (returned as base64). Task and session records survive MCP client disconnection but are held in Worker memory and do not survive Worker restart.
+`send` returns after writing stdin; poll `get` for subsequent output. Input is preserved exactly, including whitespace and newlines. Multiline PowerShell blocks need a final blank line. For synchronous execution, tasks, and sessions, each output stream retains up to 4 MiB; `output_truncated` reports discarded excess. Task `get` retains the record; `retrieve` returns and deletes it after execution ends. Use `device_pull` for generated files (returned as base64).
+
+Task and session records survive MCP client disconnection but are held in Worker memory and do not survive Worker restart. Each store holds at most 128 records, including active processes. Finished records expire one hour after completion; cleanup is lazy, on store access or creation (and task completion). Creating a record at capacity evicts the oldest finished records first. Active or not-yet-reaped processes are never evicted; when all slots are active, creation returns HTTP 409. Close sessions or cancel tasks and wait for process cleanup to free capacity. Session close retains its final output within this retention window.
 
 ## API surface (v1)
 
@@ -121,6 +142,7 @@ Worker endpoints:
 - `POST /v1/exec`
 - `POST /v1/files/sync`, `GET /v1/files/read?path=...`
 - `POST /v1/tasks`, `GET /v1/tasks`, `GET/DELETE /v1/tasks/{id}`
+- `POST /v1/tasks/{id}/retrieve` (return and remove a finished task)
 - `POST/GET /v1/sessions`, `GET/DELETE /v1/sessions/{id}`, `POST /v1/sessions/{id}/input`
 
 Bridge endpoints mirror Worker execution endpoints under `/v1/devices/{device-id}/...`, with `GET/POST /v1/devices` for the in-memory catalog.

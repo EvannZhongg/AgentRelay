@@ -154,7 +154,7 @@ func toolDefinitions() []map[string]any {
 		return map[string]any{"type": "string", "description": description}
 	}
 	return []map[string]any{
-		{"name": "device_list", "description": "List online devices and their capabilities. Probe registered workers before returning.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
+		{"name": "device_list", "description": "List all registered devices, capabilities, online status, and last_seen. Probe workers before returning; offline entries remain visible.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
 		{"name": "device_exec", "description": "Execute a command on a device workspace and return stdout, stderr and exit status.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false,
 			"properties": map[string]any{
@@ -171,7 +171,7 @@ func toolDefinitions() []map[string]any {
 		{"name": "device_pull", "description": "Read remote files or test results from a device workspace.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false, "properties": map[string]any{"device_id": stringProperty("Registered device ID."), "path": stringProperty("One remote workspace-relative file path."), "paths": map[string]any{"type": "array", "items": stringProperty("Remote file path.")}}, "required": []string{"device_id"},
 		}},
-		{"name": "device_task", "description": "Start, list, query, cancel, or retrieve an asynchronous device task.", "inputSchema": map[string]any{
+		{"name": "device_task", "description": "Start, list, query or cancel a task. get retains the record; retrieve returns a finished task and deletes its record, and fails while the task is running.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false, "properties": map[string]any{
 				"action": map[string]any{"type": "string", "enum": []string{"start", "list", "get", "cancel", "retrieve"}}, "device_id": stringProperty("Registered device ID."), "task_id": stringProperty("Task ID for get, cancel, or retrieve."), "command": stringProperty("Command for start."), "working_dir": stringProperty("Workspace-relative working directory."), "env": map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")}, "timeout_ms": map[string]any{"type": "integer", "minimum": 1},
 			}, "required": []string{"device_id", "action"},
@@ -215,13 +215,7 @@ func callTool(ctx context.Context, client *bridge.Client, raw json.RawMessage) (
 	switch call.Name {
 	case "device_list":
 		devices, err := client.Devices(ctx)
-		online := make([]protocol.Device, 0, len(devices))
-		for _, device := range devices {
-			if device.Online {
-				online = append(online, device)
-			}
-		}
-		return toolJSON(online), err
+		return toolJSON(devices), err
 	case "device_exec":
 		id, err := requiredString(call.Arguments, "device_id")
 		if err != nil {
@@ -308,7 +302,13 @@ func callTask(ctx context.Context, client *bridge.Client, args map[string]any) (
 		if taskErr != nil {
 			return nil, taskErr
 		}
-		task, getErr := client.GetTask(ctx, id, taskID)
+		var task protocol.Task
+		var getErr error
+		if action == "retrieve" {
+			task, getErr = client.RetrieveTask(ctx, id, taskID)
+		} else {
+			task, getErr = client.GetTask(ctx, id, taskID)
+		}
 		return toolJSON(task), getErr
 	case "cancel":
 		taskID, taskErr := requiredString(args, "task_id")
