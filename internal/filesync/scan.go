@@ -74,16 +74,17 @@ func Scan(options Options) (ScanResult, error) {
 	matcher := gitignore.NewMatcher(patterns)
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
+	result := ScanResult{Root: root, IgnorePatterns: rules}
 	cache := scanCache{Roots: map[string]map[string]cacheEntry{}}
 	if err := state.Load(state.Path("sync-cache"), &cache); err != nil {
-		return ScanResult{}, fmt.Errorf("load sync cache: %w", err)
+		result.Warnings = append(result.Warnings, fmt.Sprintf("ignored invalid sync hash cache: %v", err))
+		cache = scanCache{Roots: map[string]map[string]cacheEntry{}}
 	}
 	if cache.Roots == nil {
 		cache.Roots = map[string]map[string]cacheEntry{}
 	}
 	old := cache.Roots[root]
 	next := map[string]cacheEntry{}
-	result := ScanResult{Root: root, IgnorePatterns: rules}
 	err = filepath.WalkDir(root, func(localPath string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -105,7 +106,8 @@ func Scan(options Options) (ScanResult, error) {
 			return nil
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("symbolic link %q is not supported; ignore it explicitly", rel)
+			result.Warnings = append(result.Warnings, fmt.Sprintf("skipped symbolic link %s", rel))
+			return nil
 		}
 		if entry.IsDir() {
 			return nil
@@ -138,7 +140,7 @@ func Scan(options Options) (ScanResult, error) {
 	sort.Slice(result.Entries, func(i, j int) bool { return result.Entries[i].Path < result.Entries[j].Path })
 	cache.Roots[root] = next
 	if err := state.Save(state.Path("sync-cache"), cache); err != nil {
-		return ScanResult{}, fmt.Errorf("save sync cache: %w", err)
+		result.Warnings = append(result.Warnings, fmt.Sprintf("could not save sync hash cache: %v", err))
 	}
 	return result, nil
 }
@@ -185,15 +187,18 @@ func loadPatterns(root string, options Options) ([]gitignore.Pattern, []protocol
 	}
 	path := filepath.Join(root, ".agentrelayignore")
 	{
-		if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
-			return nil, nil, errors.New(".agentrelayignore must not be a symbolic link")
+		info, statErr := os.Lstat(path)
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return nil, nil, statErr
 		}
-		parsed, parsedRules, err := parsePatternFile(path, nil)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, nil, err
+		if statErr != nil || info.Mode()&os.ModeSymlink == 0 {
+			parsed, parsedRules, err := parsePatternFile(path, nil)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, nil, err
+			}
+			patterns = append(patterns, parsed...)
+			rules = append(rules, parsedRules...)
 		}
-		patterns = append(patterns, parsed...)
-		rules = append(rules, parsedRules...)
 	}
 	for _, pattern := range options.Exclude {
 		patterns = append(patterns, gitignore.ParsePattern(pattern, nil))

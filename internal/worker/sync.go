@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"AgentRelay/internal/pathutil"
@@ -43,14 +44,16 @@ type managedManifest struct {
 }
 
 type syncState struct {
+	mu       sync.Mutex
 	id       string
 	root     string
 	rootPath string
 	mode     string
 	stage    string
-	expires  time.Time
+	expires  atomic.Int64
 	manifest map[string]protocol.SyncManifestEntry
 	ignore   []protocol.SyncIgnorePattern
+	matcher  gitignore.Matcher
 	final    bool
 	planned  bool
 	upload   map[string]bool
@@ -87,7 +90,7 @@ func (s *Server) syncStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("remote root uses the reserved .agentrelay directory"))
 		return
 	}
-	root, err := resolveWithoutSymlinks(s.cfg.Workspace, req.Root, true)
+	root, err := resolveWithoutSymlinks(s.cfg.Workspace, req.Root)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -103,18 +106,22 @@ func (s *Server) syncStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	session := &syncState{id: id, root: req.Root, rootPath: root, mode: req.Mode, stage: stage, manifest: map[string]protocol.SyncManifestEntry{}, upload: map[string]bool{}}
+	session.expires.Store(expires.UnixNano())
 	s.syncs.mu.Lock()
-	s.syncs.cleanupExpiredLocked()
+	expired := s.syncs.cleanupExpiredLocked()
 	for _, active := range s.syncs.values {
 		if active.root == req.Root {
 			s.syncs.mu.Unlock()
+			removeSyncStages(expired)
 			_ = os.RemoveAll(stage)
 			writeError(w, http.StatusConflict, errors.New("another sync is already active for this root"))
 			return
 		}
 	}
-	s.syncs.values[id] = &syncState{id: id, root: req.Root, rootPath: root, mode: req.Mode, stage: stage, expires: expires, manifest: map[string]protocol.SyncManifestEntry{}, upload: map[string]bool{}}
+	s.syncs.values[id] = session
 	s.syncs.mu.Unlock()
+	removeSyncStages(expired)
 	writeJSON(w, http.StatusCreated, protocol.SyncStartResponse{ID: id, Root: req.Root, ChunkSizeBytes: syncChunkSize, ExpiresAt: expires})
 }
 
@@ -124,16 +131,17 @@ func (s *Server) syncSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("sync id is required"))
 		return
 	}
-	s.syncs.mu.Lock()
-	defer s.syncs.mu.Unlock()
-	s.syncs.cleanupExpiredLocked()
-	session := s.syncs.values[parts[0]]
+	session := s.syncs.acquire(parts[0])
 	if session == nil {
 		writeError(w, http.StatusNotFound, errors.New("sync session not found or expired"))
 		return
 	}
+	defer func() {
+		session.expires.Store(time.Now().Add(syncTTL).UnixNano())
+		session.mu.Unlock()
+	}()
 	if len(parts) == 1 && r.Method == http.MethodDelete {
-		s.syncs.removeLocked(session)
+		s.syncs.remove(session)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -185,7 +193,7 @@ func (s *Server) receiveManifest(w http.ResponseWriter, r *http.Request, session
 			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid sha256 for %s", entry.Path))
 			return
 		}
-		if _, err := resolveWithoutSymlinks(session.rootPath, entry.Path, false); err != nil {
+		if _, err := resolveWithoutSymlinks(session.rootPath, entry.Path); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -223,7 +231,13 @@ func (s *Server) receiveManifest(w http.ResponseWriter, r *http.Request, session
 		session.ignore = append(session.ignore, rule)
 	}
 	session.final = req.Final
-	session.expires = time.Now().Add(syncTTL)
+	if session.final {
+		patterns := make([]gitignore.Pattern, 0, len(session.ignore))
+		for _, rule := range session.ignore {
+			patterns = append(patterns, gitignore.ParsePattern(rule.Pattern, rule.Domain))
+		}
+		session.matcher = gitignore.NewMatcher(patterns)
+	}
 	writeJSON(w, http.StatusOK, protocol.SyncManifestResponse{Received: len(session.manifest)})
 }
 
@@ -253,7 +267,7 @@ func (s *Server) planSync(w http.ResponseWriter, session *syncState) {
 	plan := protocol.SyncPlanResponse{}
 	for _, relative := range paths {
 		entry := session.manifest[relative]
-		destination, err := resolveWithoutSymlinks(session.rootPath, relative, true)
+		destination, err := resolveWithoutSymlinks(session.rootPath, relative)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
@@ -288,7 +302,7 @@ func (s *Server) planSync(w http.ResponseWriter, session *syncState) {
 	}
 	if session.mode == protocol.SyncModeMirror {
 		for relative := range managed.Entries {
-			if _, exists := session.manifest[relative]; !exists && !isIgnored(relative, session.ignore) {
+			if _, exists := session.manifest[relative]; !exists && !isIgnored(relative, session.matcher) {
 				plan.Delete = append(plan.Delete, relative)
 			}
 		}
@@ -375,7 +389,6 @@ func (s *Server) receiveSyncChunk(w http.ResponseWriter, r *http.Request, sessio
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	session.expires = time.Now().Add(syncTTL)
 	writeJSON(w, http.StatusOK, map[string]any{"received": current + int64(len(data)), "complete": current+int64(len(data)) == entry.Size})
 }
 
@@ -432,7 +445,7 @@ func (s *Server) commitSync(w http.ResponseWriter, session *syncState) {
 	var uploadedBytes int64
 	for _, relative := range uploads {
 		entry := session.manifest[relative]
-		destination, err := resolveWithoutSymlinks(session.rootPath, relative, true)
+		destination, err := resolveWithoutSymlinks(session.rootPath, relative)
 		if err != nil {
 			rollback()
 			writeError(w, http.StatusBadRequest, err)
@@ -475,7 +488,7 @@ func (s *Server) commitSync(w http.ResponseWriter, session *syncState) {
 	}
 	deleted := 0
 	for _, relative := range session.deletes {
-		destination, err := resolveWithoutSymlinks(session.rootPath, relative, true)
+		destination, err := resolveWithoutSymlinks(session.rootPath, relative)
 		if err != nil {
 			rollback()
 			writeError(w, http.StatusBadRequest, err)
@@ -516,7 +529,7 @@ func (s *Server) commitSync(w http.ResponseWriter, session *syncState) {
 	}
 	for relative, entry := range previous.Entries {
 		_, present := session.manifest[relative]
-		if !present && (session.mode == protocol.SyncModeUpdate || isIgnored(relative, session.ignore)) {
+		if !present && (session.mode == protocol.SyncModeUpdate || isIgnored(relative, session.matcher)) {
 			managed.Entries[relative] = entry
 		}
 	}
@@ -526,22 +539,59 @@ func (s *Server) commitSync(w http.ResponseWriter, session *syncState) {
 		return
 	}
 	result := protocol.SyncCommitResponse{Uploaded: len(uploads), Deleted: deleted, UploadedBytes: uploadedBytes}
-	s.syncs.removeLocked(session)
+	s.syncs.remove(session)
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (s *syncStore) cleanupExpiredLocked() {
-	now := time.Now()
-	for _, session := range s.values {
-		if now.After(session.expires) {
-			s.removeLocked(session)
-		}
+func (s *syncStore) acquire(id string) *syncState {
+	s.mu.Lock()
+	expired := s.cleanupExpiredLocked()
+	session := s.values[id]
+	s.mu.Unlock()
+	removeSyncStages(expired)
+	if session == nil {
+		return nil
 	}
+	session.mu.Lock()
+	s.mu.Lock()
+	current := s.values[id]
+	if current != session {
+		s.mu.Unlock()
+		session.mu.Unlock()
+		return nil
+	}
+	session.expires.Store(time.Now().Add(syncTTL).UnixNano())
+	s.mu.Unlock()
+	return session
 }
 
-func (s *syncStore) removeLocked(session *syncState) {
-	delete(s.values, session.id)
+func (s *syncStore) cleanupExpiredLocked() []*syncState {
+	now := time.Now()
+	var expired []*syncState
+	for _, session := range s.values {
+		if now.UnixNano() <= session.expires.Load() || !session.mu.TryLock() {
+			continue
+		}
+		delete(s.values, session.id)
+		expired = append(expired, session)
+		session.mu.Unlock()
+	}
+	return expired
+}
+
+func (s *syncStore) remove(session *syncState) {
+	s.mu.Lock()
+	if s.values[session.id] == session {
+		delete(s.values, session.id)
+	}
+	s.mu.Unlock()
 	_ = os.RemoveAll(session.stage)
+}
+
+func removeSyncStages(sessions []*syncState) {
+	for _, session := range sessions {
+		_ = os.RemoveAll(session.stage)
+	}
 }
 
 func (s *syncStore) manifestPath(root string) string {
@@ -612,7 +662,7 @@ func (s *syncStore) saveManaged(manifest managedManifest) error {
 	return nil
 }
 
-func resolveWithoutSymlinks(root, relative string, allowMissing bool) (string, error) {
+func resolveWithoutSymlinks(root, relative string) (string, error) {
 	target, err := pathutil.ResolveUnderRoot(root, relative)
 	if err != nil {
 		return "", err
@@ -629,9 +679,6 @@ func resolveWithoutSymlinks(root, relative string, allowMissing bool) (string, e
 	for _, part := range strings.Split(rel, string(filepath.Separator)) {
 		current = filepath.Join(current, part)
 		info, err := os.Lstat(current)
-		if errors.Is(err, os.ErrNotExist) && allowMissing {
-			continue
-		}
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
@@ -646,7 +693,7 @@ func resolveWithoutSymlinks(root, relative string, allowMissing bool) (string, e
 }
 
 func (s *Server) validateSyncRoot(session *syncState) error {
-	root, err := resolveWithoutSymlinks(s.cfg.Workspace, session.root, true)
+	root, err := resolveWithoutSymlinks(s.cfg.Workspace, session.root)
 	if err != nil {
 		return err
 	}
@@ -661,12 +708,8 @@ func reservedSyncRoot(root string) bool {
 	return clean == ".agentrelay" || strings.HasPrefix(clean, ".agentrelay/")
 }
 
-func isIgnored(path string, rules []protocol.SyncIgnorePattern) bool {
-	patterns := make([]gitignore.Pattern, 0, len(rules))
-	for _, rule := range rules {
-		patterns = append(patterns, gitignore.ParsePattern(rule.Pattern, rule.Domain))
-	}
-	return gitignore.NewMatcher(patterns).Match(strings.Split(path, "/"), false)
+func isIgnored(path string, matcher gitignore.Matcher) bool {
+	return matcher != nil && matcher.Match(strings.Split(path, "/"), false)
 }
 
 func randomSyncID() (string, error) {

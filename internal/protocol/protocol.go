@@ -98,11 +98,6 @@ type SyncPlanResponse struct {
 	UnchangedBytes int64    `json:"unchanged_bytes"`
 }
 
-type SyncCommitRequest struct {
-	SourcePath string `json:"source_path"`
-	Root       string `json:"root"`
-}
-
 type SyncCommitResponse struct {
 	Uploaded      int   `json:"uploaded"`
 	Deleted       int   `json:"deleted"`

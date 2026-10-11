@@ -101,7 +101,7 @@ func TestWorkerExecSyncAndPathBoundary(t *testing.T) {
 	if err != nil || string(beforeCommit) != "old" {
 		t.Fatalf("target changed before commit: %q, %v", beforeCommit, err)
 	}
-	resp = postJSON("/v1/files/sync/"+started.ID+"/commit", protocol.SyncCommitRequest{}, nil)
+	resp = postJSON("/v1/files/sync/"+started.ID+"/commit", struct{}{}, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("commit status = %d", resp.StatusCode)
 	}

@@ -82,8 +82,7 @@ func (c *Client) Sync(ctx context.Context, id string, options filesync.Options) 
 		}
 	}
 	var commit protocol.SyncCommitResponse
-	commitRequest := protocol.SyncCommitRequest{SourcePath: scan.Root, Root: started.Root}
-	if err = c.Do(ctx, httpMethodPost, syncOperationPath(id, started.ID, "commit"), commitRequest, &commit); err != nil {
+	if err = c.Do(ctx, httpMethodPost, syncOperationPath(id, started.ID, "commit"), struct{}{}, &commit); err != nil {
 		return result, err
 	}
 	committed = true

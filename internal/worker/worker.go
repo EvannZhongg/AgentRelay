@@ -77,10 +77,17 @@ func (s *Server) Device() protocol.Device {
 
 func (s *Server) Close() {
 	s.syncs.mu.Lock()
+	syncSessions := make([]*syncState, 0, len(s.syncs.values))
 	for _, session := range s.syncs.values {
-		s.syncs.removeLocked(session)
+		syncSessions = append(syncSessions, session)
 	}
+	s.syncs.values = map[string]*syncState{}
 	s.syncs.mu.Unlock()
+	for _, session := range syncSessions {
+		session.mu.Lock()
+		_ = os.RemoveAll(session.stage)
+		session.mu.Unlock()
+	}
 	for _, task := range s.tasks.list() {
 		s.tasks.cancel(task.ID)
 	}

@@ -4,7 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+
+	"AgentRelay/internal/state"
 )
 
 func TestScanAppliesNestedGitIgnoreAndAgentRelayIgnore(t *testing.T) {
@@ -51,7 +54,7 @@ func TestScanAppliesNestedGitIgnoreAndAgentRelayIgnore(t *testing.T) {
 	}
 }
 
-func TestScanRejectsSymbolicLinks(t *testing.T) {
+func TestScanSkipsSymbolicLinks(t *testing.T) {
 	t.Setenv("AGENTRELAY_HOME", t.TempDir())
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "outside.txt")
@@ -61,7 +64,56 @@ func TestScanRejectsSymbolicLinks(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(root, "link.txt")); err != nil {
 		t.Skipf("symbolic links are unavailable: %v", err)
 	}
-	if _, err := Scan(Options{SourcePath: root}); err == nil {
-		t.Fatal("symbolic link was accepted")
+	result, err := Scan(Options{SourcePath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Entries) != 0 {
+		t.Fatalf("entries = %+v", result.Entries)
+	}
+	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "skipped symbolic link link.txt") {
+		t.Fatalf("warnings = %v", result.Warnings)
+	}
+}
+
+func TestScanRecoversFromInvalidCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AGENTRELAY_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "sync-cache.json"), []byte("not json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Scan(Options{SourcePath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Entries) != 1 || len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "ignored invalid sync hash cache") {
+		t.Fatalf("scan result = %+v", result)
+	}
+	var cache scanCache
+	if err := state.Load(filepath.Join(home, "sync-cache.json"), &cache); err != nil {
+		t.Fatalf("cache was not rebuilt: %v", err)
+	}
+}
+
+func TestScanContinuesWhenCacheCannotBeSaved(t *testing.T) {
+	homeFile := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(homeFile, []byte("file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENTRELAY_HOME", homeFile)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Scan(Options{SourcePath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Entries) != 1 || len(result.Warnings) < 1 || !strings.Contains(result.Warnings[len(result.Warnings)-1], "could not save sync hash cache") {
+		t.Fatalf("scan result = %+v", result)
 	}
 }

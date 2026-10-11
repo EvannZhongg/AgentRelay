@@ -27,6 +27,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const syncMappingRetention = time.Hour
+
 type Config struct{ ListenAddr, StatePath string }
 type record struct {
 	Device    protocol.Device `json:"device"`
@@ -37,11 +39,23 @@ type registry struct {
 	Devices  map[string]record  `json:"devices"`
 }
 type Server struct {
-	cfg         Config
-	mu          sync.RWMutex
-	store       registry
-	connections map[string]*transport.Peer
-	pairings    map[string]*pendingPairing
+	cfg          Config
+	mu           sync.RWMutex
+	store        registry
+	connections  map[string]*transport.Peer
+	pairings     map[string]*pendingPairing
+	syncMappings map[syncMappingKey]syncMapping
+}
+
+type syncMappingKey struct {
+	deviceID string
+	syncID   string
+}
+
+type syncMapping struct {
+	sourcePath string
+	root       string
+	expiresAt  time.Time
 }
 
 type pendingPairing struct {
@@ -57,7 +71,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.StatePath == "" {
 		cfg.StatePath = state.Path("bridge")
 	}
-	s := &Server{cfg: cfg, connections: map[string]*transport.Peer{}, pairings: map[string]*pendingPairing{}}
+	s := &Server{cfg: cfg, connections: map[string]*transport.Peer{}, pairings: map[string]*pendingPairing{}, syncMappings: map[syncMappingKey]syncMapping{}}
 	if err := state.Load(cfg.StatePath, &s.store); err != nil {
 		return nil, fmt.Errorf("load bridge state: %w", err)
 	}
@@ -413,19 +427,18 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 413, errors.New("RPC payload exceeds 32 MiB"))
 		return
 	}
-	if endpoint == "/v1/files/sync/start" && r.Method == "POST" {
-		data, err = s.prepareSyncStart(id, data)
+	isSyncStart := endpoint == "/v1/files/sync/start" && r.Method == http.MethodPost
+	var pendingMapping syncMapping
+	if isSyncStart {
+		data, pendingMapping, err = s.prepareSyncStart(id, data)
 		if err != nil {
 			writeError(w, 400, err)
 			return
 		}
 	}
-	isSyncCommit := strings.HasPrefix(endpoint, "/v1/files/sync/") && strings.HasSuffix(endpoint, "/commit")
-	var syncMapping []byte
-	if isSyncCommit {
-		syncMapping = append([]byte(nil), data...)
-		data = []byte("{}")
-	}
+	syncID, syncOperation, isSyncSession := parseSyncOperation(endpoint)
+	isSyncCommit := isSyncSession && syncOperation == "commit" && r.Method == http.MethodPost
+	isSyncAbort := isSyncSession && syncOperation == "" && r.Method == http.MethodDelete
 	if endpoint == "/v1/exec" || (r.Method == "POST" && (endpoint == "/v1/tasks" || endpoint == "/v1/sessions")) {
 		var fields map[string]json.RawMessage
 		if json.Unmarshal(data, &fields) == nil {
@@ -447,11 +460,26 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 502, err)
 		return
 	}
+	if isSyncStart && resp.Status < http.StatusMultipleChoices {
+		var started protocol.SyncStartResponse
+		if err := json.Unmarshal(resp.Body, &started); err != nil || started.ID == "" || started.Root != pendingMapping.root {
+			writeError(w, http.StatusBadGateway, errors.New("worker returned an invalid sync session"))
+			return
+		}
+		pendingMapping.expiresAt = time.Now().Add(syncMappingRetention)
+		s.rememberSyncMapping(id, started.ID, pendingMapping)
+	}
 	if isSyncCommit && resp.Status < http.StatusMultipleChoices {
-		if err := s.persistSyncMapping(id, syncMapping); err != nil {
+		if err := s.persistSyncMapping(id, syncID); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+	}
+	if isSyncAbort && resp.Status < http.StatusMultipleChoices {
+		s.forgetSyncMapping(id, syncID)
+	}
+	if isSyncSession && !isSyncCommit && !isSyncAbort && resp.Status < http.StatusMultipleChoices {
+		s.refreshSyncMapping(id, syncID)
 	}
 	if strings.Split(endpoint, "?")[0] == "/v1/desktop/capture" && resp.Status == http.StatusOK {
 		resp.Body, err = s.captureArtifact(data, resp.Body)
@@ -517,6 +545,13 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request, id string)
 		writeError(w, 500, err)
 		return
 	}
+	if r.Method == "DELETE" {
+		for key := range s.syncMappings {
+			if key.deviceID == id {
+				delete(s.syncMappings, key)
+			}
+		}
+	}
 	peer := s.connections[id]
 	if r.Method == "DELETE" || !rec.Device.Authorized {
 		delete(s.connections, id)
@@ -569,23 +604,23 @@ func mappedDir(mappings map[string]string, dir string) (string, bool) {
 	}
 	return result, best != ""
 }
-func (s *Server) prepareSyncStart(id string, data []byte) ([]byte, error) {
+func (s *Server) prepareSyncStart(id string, data []byte) ([]byte, syncMapping, error) {
 	var req protocol.SyncStartRequest
 	if err := json.Unmarshal(data, &req); err != nil {
-		return nil, err
+		return nil, syncMapping{}, err
 	}
 	if !filepath.IsAbs(req.SourcePath) {
-		return nil, errors.New("source_path must be an absolute controller path")
+		return nil, syncMapping{}, errors.New("source_path must be an absolute controller path")
 	}
 	local, err := filepath.Abs(req.SourcePath)
 	if err != nil {
-		return nil, err
+		return nil, syncMapping{}, err
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rec, ok := s.store.Devices[id]
 	if !ok {
-		return nil, errors.New("device not found")
+		return nil, syncMapping{}, errors.New("device not found")
 	}
 	if req.Root == "" {
 		if mapped, ok := rec.Device.Mappings[local]; ok {
@@ -596,26 +631,66 @@ func (s *Server) prepareSyncStart(id string, data []byte) ([]byte, error) {
 		}
 	}
 	if !validRemote(req.Root) {
-		return nil, errors.New("remote root must be workspace-relative")
+		return nil, syncMapping{}, errors.New("remote root must be workspace-relative")
 	}
+	mapping := syncMapping{sourcePath: local, root: req.Root}
 	req.SourcePath = ""
-	return json.Marshal(req)
+	forwarded, err := json.Marshal(req)
+	return forwarded, mapping, err
 }
 
-func (s *Server) persistSyncMapping(id string, data []byte) error {
-	var req protocol.SyncCommitRequest
-	if err := json.Unmarshal(data, &req); err != nil {
-		return err
+func parseSyncOperation(endpoint string) (string, string, bool) {
+	const prefix = "/v1/files/sync/"
+	if !strings.HasPrefix(endpoint, prefix) {
+		return "", "", false
 	}
-	if !filepath.IsAbs(req.SourcePath) || !validRemote(req.Root) {
-		return errors.New("invalid sync mapping")
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(endpoint, prefix), "/"), "/")
+	if len(parts) == 1 && parts[0] != "" {
+		return parts[0], "", true
 	}
-	local, err := filepath.Abs(req.SourcePath)
-	if err != nil {
-		return err
+	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+		return parts[0], parts[1], true
 	}
+	return "", "", false
+}
+
+func (s *Server) rememberSyncMapping(deviceID, syncID string, mapping syncMapping) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now()
+	for key, current := range s.syncMappings {
+		if !current.expiresAt.IsZero() && now.After(current.expiresAt) {
+			delete(s.syncMappings, key)
+		}
+	}
+	s.syncMappings[syncMappingKey{deviceID: deviceID, syncID: syncID}] = mapping
+}
+
+func (s *Server) forgetSyncMapping(deviceID, syncID string) {
+	s.mu.Lock()
+	delete(s.syncMappings, syncMappingKey{deviceID: deviceID, syncID: syncID})
+	s.mu.Unlock()
+}
+
+func (s *Server) refreshSyncMapping(deviceID, syncID string) {
+	s.mu.Lock()
+	key := syncMappingKey{deviceID: deviceID, syncID: syncID}
+	mapping, exists := s.syncMappings[key]
+	if exists {
+		mapping.expiresAt = time.Now().Add(syncMappingRetention)
+		s.syncMappings[key] = mapping
+	}
+	s.mu.Unlock()
+}
+
+func (s *Server) persistSyncMapping(id, syncID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := syncMappingKey{deviceID: id, syncID: syncID}
+	mapping, exists := s.syncMappings[key]
+	if !exists {
+		return errors.New("sync session mapping not found")
+	}
 	rec, ok := s.store.Devices[id]
 	if !ok {
 		return errors.New("device not found")
@@ -625,13 +700,14 @@ func (s *Server) persistSyncMapping(id string, data []byte) error {
 	for key, value := range rec.Device.Mappings {
 		mappings[key] = value
 	}
-	mappings[local] = req.Root
+	mappings[mapping.sourcePath] = mapping.root
 	rec.Device.Mappings = mappings
 	s.store.Devices[id] = rec
 	if err := s.save(); err != nil {
 		s.store.Devices[id] = previous
 		return err
 	}
+	delete(s.syncMappings, key)
 	return nil
 }
 func readJSON(r *http.Request, dst any) error {
