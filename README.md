@@ -57,6 +57,7 @@ Find paired devices, sync a project, run a command and collect a result:
 ```powershell
 AgentRelay device list
 AgentRelay sync --device <id> --source C:\src\project
+AgentRelay sync --device <id> --source C:\src\project --mode mirror --exclude .cache/
 AgentRelay exec --device <id> --dir C:\src\project "dotnet test"
 AgentRelay task start --device <id> --dir C:\src\project --timeout-ms 60000 "npm run build"
 AgentRelay task get --device <id> --id <task-id>
@@ -73,7 +74,7 @@ AgentRelay session get --device <id> --id <session-id>
 AgentRelay session close --device <id> --id <session-id>
 ```
 
-Remote paths are relative to the Worker's authorized workspace. `sync` persists a local-project-to-remote-root mapping, so later commands can use the same local project directory. Tasks and sessions are in memory and are not reconstructed after a Worker process restart.
+Remote paths are relative to the Worker's authorized workspace. `sync` compares SHA-256 manifests and uploads changed files in bounded chunks, so directories and individual files are not limited by the 32 MiB RPC payload cap. It applies nested `.gitignore` files and a root `.agentrelayignore` by default; repeat `--exclude` for additional gitignore-compatible patterns or use `--no-gitignore`. `--mode update` keeps remote extras, while `--mode mirror` removes only files managed by an earlier sync and now absent locally. `--dry-run` reports the plan without changing the Worker. A successful sync persists the local-project-to-remote-root mapping, so later commands can use the same local project directory. Tasks and sessions are in memory and are not reconstructed after a Worker process restart.
 
 Manage authorization without pairing again:
 

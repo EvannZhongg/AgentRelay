@@ -27,7 +27,9 @@ The controller management API is loopback-only. Remote computers can pair and es
 
 ## Workspaces And Operations
 
-The controller workspace is the source of truth. `sync` uploads a directory and persists a mapping from an absolute controller path to a Worker-relative root. `exec`, task creation and session creation may then use the mapped controller path or an explicit Worker-relative path. File reads and writes are resolved below the authorized Worker workspace.
+The controller workspace is the source of truth. `sync` scans the local directory with gitignore-compatible rules, sends a SHA-256 manifest, uploads only changed files in 4 MiB chunks, and applies verified staging files with rollback on reported commit errors. `update` mode preserves remote extras; `mirror` deletes only paths recorded in an earlier managed manifest and excludes ignored paths. A successful commit persists a mapping from the absolute controller path to the Worker-relative root. `exec`, task creation and session creation may then use the mapped controller path or an explicit Worker-relative path. File reads and writes are resolved below the authorized Worker workspace.
+
+Sync sessions expire after 30 minutes. Upload chunks are checksum-verified and idempotent by path and offset. Incomplete or aborted sessions only leave staging data, which is removed on abort, Worker shutdown, or the next sync after expiry; target files are not changed before commit. No target file can contain a partial upload, although a Worker process crash during commit may leave a mixed tree. Worker-managed manifests and staging data live below the reserved `.agentrelay` workspace directory. Source and destination symbolic links are rejected.
 
 Synchronous execution is cancelled when its RPC connection is lost. Tasks and shell sessions can outlive an MCP request and survive Bridge/network reconnection while the same Worker process remains alive. A Worker restart retains identity and workspace credentials but does not reconstruct running processes or in-memory task/session records.
 
@@ -35,7 +37,7 @@ Each task and session store retains at most 128 records. Finished records expire
 
 ## Persistence
 
-State is stored under the current user's `AgentRelay` configuration directory (`%APPDATA%\AgentRelay` on Windows). Set `AGENTRELAY_HOME` to isolate a complete CLI/MCP/Bridge installation. The Bridge persists its TLS identity, device IDs, credential hashes, aliases, authorization, workspace roots and project mappings. The Worker persists its pairing credentials and workspace. Credentials are not returned in device listings.
+State is stored under the current user's `AgentRelay` configuration directory (`%APPDATA%\AgentRelay` on Windows). Set `AGENTRELAY_HOME` to isolate a complete CLI/MCP/Bridge installation. The Bridge persists its TLS identity, device IDs, credential hashes, aliases, authorization, workspace roots and project mappings. Controller-side file hashes are cached there by source path. The Worker persists pairing credentials and its workspace; managed sync manifests live in the workspace's reserved `.agentrelay` directory. Credentials are not returned in device listings.
 
 After a Bridge restart, saved devices initially appear offline. Workers reconnect with exponential backoff (up to 30 seconds) and refresh capabilities without replacing aliases or mappings. If the saved Bridge address changes, run `AgentRelay worker setup` to pair again.
 
@@ -45,14 +47,14 @@ The Bridge exposes health and pairing endpoints to the network as needed for set
 
 - Pairing and connection: `GET /v1/health`, `POST /v1/pair`, `GET /v1/pair/{request-id}`, `GET /v1/connect`.
 - Pairing approval and devices: `/v1/pair-requests`, `/v1/devices`.
-- Operations: `/v1/devices/{id}/exec`, `/files/sync`, `/files/read`, `/tasks`, `/sessions` and their sub-resources.
+- Operations: `/v1/devices/{id}/exec`, `/files/sync/start`, `/files/sync/{session}/{manifest,plan,file,commit}`, `/files/read`, `/tasks`, `/sessions` and their sub-resources.
 - Desktop: `GET /v1/devices/{id}/desktop`, `POST /v1/devices/{id}/desktop/capture`, `POST /v1/devices/{id}/desktop/input`.
 
-There is no compatibility layer for removed Worker URL registration, Worker listening flags or the previous device-ID derivation. Service installation, incremental sync, PTY support and multi-device scheduling are outside the current implementation.
+There is no compatibility layer for the removed single-request sync format, Worker URL registration, Worker listening flags or the previous device-ID derivation. Service installation, PTY support and multi-device scheduling are outside the current implementation.
 
 ## Failure And Recovery Rules
 
-- Failed or interrupted RPC calls are never automatically replayed because the operation may already have started.
+- Failed or interrupted RPC calls are never automatically replayed because the operation may already have started. Sync chunk uploads are the exception: the client may safely retry an identical chunk at the same offset; commit is not replayed automatically.
 - A disconnected Worker is shown as offline until it reconnects; saved aliases and mappings remain available.
 - A still-running task cannot be retrieved. Poll it with `get` until `finished_at` is set, then call `retrieve`.
 - Desktop input is serialized in the Worker and is never replayed after reconnecting.

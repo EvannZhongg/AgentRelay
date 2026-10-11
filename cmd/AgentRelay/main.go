@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -191,46 +189,6 @@ func taskCommand(args []string) error {
 		return fmt.Errorf("unknown task command %q", args[0])
 	}
 }
-func syncCommand(args []string) error {
-	f := flag.NewFlagSet("sync", flag.ContinueOnError)
-	base := f.String("bridge", bridge.DefaultURL, "bridge URL")
-	id := f.String("device", "", "device ID")
-	source := f.String("source", ".", "local source directory")
-	remote := f.String("remote", "", "remote root (automatically mapped when omitted)")
-	if err := f.Parse(args); err != nil {
-		return err
-	}
-	if *id == "" {
-		return errors.New("--device is required")
-	}
-	files := make([]protocol.FileEntry, 0)
-	err := filepath.WalkDir(*source, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(*source, path)
-		if err != nil {
-			return err
-		}
-		files = append(files, protocol.FileEntry{Path: filepath.ToSlash(rel), ContentBase64: base64.StdEncoding.EncodeToString(data)})
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	result, err := bridge.NewClient(*base).Sync(context.Background(), *id, protocol.SyncRequest{SourcePath: *source, Root: *remote, Files: files})
-	if err != nil {
-		return err
-	}
-	return printJSON(result)
-}
 
 type mcpServerConfig struct {
 	Command string   `json:"command"`
@@ -285,5 +243,5 @@ func printJSON(v any) error {
 	return err
 }
 func usage() {
-	fmt.Println("AgentRelay\n\nUsage:\n  AgentRelay setup\n  AgentRelay bridge serve\n  AgentRelay worker setup|serve\n  AgentRelay device list|rename|authorize|revoke|remove\n  AgentRelay exec --device <id> [--dir <local-project-or-remote-path>] <command>\n  AgentRelay task start|list|get|retrieve|cancel --device <id> [--id <task-id>]\n  AgentRelay sync --device <id> --source <dir>\n  AgentRelay pull --device <id> [--out <local-dir>] <remote-path>...\n  AgentRelay session create|list|get|send|close --device <id> [--id <session-id>]\n  AgentRelay desktop info|capture|input --device <id> [--json <object>]\n  AgentRelay mcp config")
+	fmt.Println("AgentRelay\n\nUsage:\n  AgentRelay setup\n  AgentRelay bridge serve\n  AgentRelay worker setup|serve\n  AgentRelay device list|rename|authorize|revoke|remove\n  AgentRelay exec --device <id> [--dir <local-project-or-remote-path>] <command>\n  AgentRelay task start|list|get|retrieve|cancel --device <id> [--id <task-id>]\n  AgentRelay sync --device <id> --source <dir> [--mode update|mirror] [--dry-run]\n  AgentRelay pull --device <id> [--out <local-dir>] <remote-path>...\n  AgentRelay session create|list|get|send|close --device <id> [--id <session-id>]\n  AgentRelay desktop info|capture|input --device <id> [--json <object>]\n  AgentRelay mcp config")
 }

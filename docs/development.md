@@ -8,6 +8,7 @@ This document is for contributors. User setup and day-to-day commands belong in 
 cmd/AgentRelay       controller CLI
 cmd/AgentRelay-mcp   stdio MCP adapter
 internal/bridge      HTTPS controller, pairing and routing
+internal/filesync    controller-side scanning, ignore evaluation and hashing
 internal/worker      Worker lifecycle, shell, files, tasks and sessions
 internal/desktop     native desktop backends and validation
 internal/protocol    shared request/response contracts

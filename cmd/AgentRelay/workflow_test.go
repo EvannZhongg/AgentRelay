@@ -116,6 +116,38 @@ func TestCLITaskWorkflow(t *testing.T) {
 	call("retrieve", &task, "--id", task.ID)
 }
 
+func TestCLIIncrementalSync(t *testing.T) {
+	common, _, _, root := cliFixture(t)
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "input.txt"), []byte("cli-sync"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := append(common, "--source", source, "--remote", "project", "--dry-run")
+	data, err := captureCommand(t, syncCommand, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result protocol.SyncResponse
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.DryRun || result.Uploaded != 1 {
+		t.Fatalf("dry run = %+v", result)
+	}
+	args = append(common, "--source", source, "--remote", "project", "--mode", "mirror")
+	data, err = captureCommand(t, syncCommand, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(root, "project", "input.txt"))
+	if err != nil || string(content) != "cli-sync" || result.Uploaded != 1 {
+		t.Fatalf("sync result = %+v, content = %q, error = %v", result, content, err)
+	}
+}
+
 func TestCLISessionAndPull(t *testing.T) {
 	common, c, device, root := cliFixture(t)
 	if err := os.Mkdir(filepath.Join(root, "project"), 0755); err != nil {

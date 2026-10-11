@@ -57,6 +57,7 @@ AgentRelay mcp config
 ```powershell
 AgentRelay device list
 AgentRelay sync --device <id> --source C:\src\project
+AgentRelay sync --device <id> --source C:\src\project --mode mirror --exclude .cache/
 AgentRelay exec --device <id> --dir C:\src\project "dotnet test"
 AgentRelay task start --device <id> --dir C:\src\project --timeout-ms 60000 "npm run build"
 AgentRelay task get --device <id> --id <task-id>
@@ -73,7 +74,7 @@ AgentRelay session get --device <id> --id <session-id>
 AgentRelay session close --device <id> --id <session-id>
 ```
 
-远端路径都相对于 Worker 授权的 Workspace。`sync` 会持久化本地项目到远端目录的映射，后续命令可以继续使用同一个本地项目目录。任务和会话只保存在内存中，Worker 进程重启后不会恢复。
+远端路径都相对于 Worker 授权的 Workspace。`sync` 通过 SHA-256 manifest 比较差异，并以固定大小的分块上传变化文件，因此目录和单文件不再受 32 MiB RPC 载荷上限约束。默认应用嵌套的 `.gitignore` 和根目录 `.agentrelayignore`；可重复使用 `--exclude` 添加 gitignore 兼容规则，或用 `--no-gitignore` 关闭 `.gitignore`。`--mode update` 保留远端额外文件，`--mode mirror` 只删除此前由同步管理、但本地已不存在的文件；`--dry-run` 只返回计划。同步成功后会持久化本地项目到远端目录的映射，后续命令可以继续使用同一个本地项目目录。任务和会话只保存在内存中，Worker 进程重启后不会恢复。
 
 无需重新配对即可管理授权：
 

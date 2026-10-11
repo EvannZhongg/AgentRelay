@@ -215,6 +215,11 @@ func TestMCPToolDefinitionsExposeDeviceCapabilities(t *testing.T) {
 	if !strings.Contains(text, `"timeout_ms"`) || !strings.Contains(text, `"env"`) {
 		t.Fatalf("exec schema does not expose env and timeout_ms: %s", text)
 	}
+	for _, field := range []string{`"mode"`, `"exclude"`, `"use_gitignore"`, `"dry_run"`} {
+		if !strings.Contains(text, field) {
+			t.Fatalf("sync schema does not expose %s: %s", field, text)
+		}
+	}
 }
 
 func TestMCPDeviceExecPassesEnvAndTimeout(t *testing.T) {

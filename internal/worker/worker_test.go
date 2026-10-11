@@ -1,10 +1,13 @@
 package worker
 
 import (
-	"encoding/base64"
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,31 +41,82 @@ func TestWorkerExecSyncAndPathBoundary(t *testing.T) {
 	if result.ExitCode != 0 || !strings.Contains(result.Stdout, "AgentRelay-ok") {
 		t.Fatalf("unexpected exec result: %+v", result)
 	}
+	if err := os.MkdirAll(filepath.Join(root, "project"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "project", "hello.txt"), []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
 
-	payload := protocol.SyncRequest{Root: "project", Files: []protocol.FileEntry{{Path: "hello.txt", ContentBase64: base64.StdEncoding.EncodeToString([]byte("hello"))}}}
-	data, _ := json.Marshal(payload)
-	resp, err = http.Post(server.URL+"/v1/files/sync", "application/json", strings.NewReader(string(data)))
+	postJSON := func(path string, value any, out any) *http.Response {
+		t.Helper()
+		data, _ := json.Marshal(value)
+		response, postErr := http.Post(server.URL+path, "application/json", bytes.NewReader(data))
+		if postErr != nil {
+			t.Fatal(postErr)
+		}
+		if out != nil && response.StatusCode < 300 {
+			if err := json.NewDecoder(response.Body).Decode(out); err != nil {
+				t.Fatal(err)
+			}
+		}
+		response.Body.Close()
+		return response
+	}
+	var started protocol.SyncStartResponse
+	resp = postJSON("/v1/files/sync/start", protocol.SyncStartRequest{Root: "project", Mode: protocol.SyncModeUpdate}, &started)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("sync start status = %d", resp.StatusCode)
+	}
+	content := []byte("hello")
+	sum := sha256.Sum256(content)
+	entry := protocol.SyncManifestEntry{Path: "hello.txt", Size: int64(len(content)), SHA256: hex.EncodeToString(sum[:]), Mode: 0644}
+	resp = postJSON("/v1/files/sync/"+started.ID+"/manifest", protocol.SyncManifestRequest{Entries: []protocol.SyncManifestEntry{entry}, Final: true}, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("manifest status = %d", resp.StatusCode)
+	}
+	var plan protocol.SyncPlanResponse
+	resp = postJSON("/v1/files/sync/"+started.ID+"/plan", struct{}{}, &plan)
+	if resp.StatusCode != http.StatusOK || len(plan.Upload) != 1 {
+		t.Fatalf("plan = %+v, status = %d", plan, resp.StatusCode)
+	}
+	query := url.Values{"path": {"hello.txt"}, "offset": {"0"}, "sha256": {hex.EncodeToString(sum[:])}}
+	resp, err = http.Post(server.URL+"/v1/files/sync/"+started.ID+"/file?"+query.Encode(), "application/octet-stream", bytes.NewReader(content))
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("sync status = %d", resp.StatusCode)
+		t.Fatalf("upload status = %d", resp.StatusCode)
 	}
-	content, err := os.ReadFile(filepath.Join(root, "project", "hello.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(content) != "hello" {
-		t.Fatalf("content = %q", content)
-	}
-
-	data, _ = json.Marshal(protocol.SyncRequest{Files: []protocol.FileEntry{{Path: "..\\escape.txt", ContentBase64: "aA=="}}})
-	resp, err = http.Post(server.URL+"/v1/files/sync", "application/json", strings.NewReader(string(data)))
+	resp, err = http.Post(server.URL+"/v1/files/sync/"+started.ID+"/file?"+query.Encode(), "application/octet-stream", bytes.NewReader(content))
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("idempotent retry status = %d", resp.StatusCode)
+	}
+	beforeCommit, err := os.ReadFile(filepath.Join(root, "project", "hello.txt"))
+	if err != nil || string(beforeCommit) != "old" {
+		t.Fatalf("target changed before commit: %q, %v", beforeCommit, err)
+	}
+	resp = postJSON("/v1/files/sync/"+started.ID+"/commit", protocol.SyncCommitRequest{}, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("commit status = %d", resp.StatusCode)
+	}
+	written, err := os.ReadFile(filepath.Join(root, "project", "hello.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != "hello" {
+		t.Fatalf("content = %q", written)
+	}
+
+	var invalid protocol.SyncStartResponse
+	postJSON("/v1/files/sync/start", protocol.SyncStartRequest{Root: "project", Mode: protocol.SyncModeUpdate}, &invalid)
+	bad := protocol.SyncManifestEntry{Path: "..\\escape.txt", Size: 1, SHA256: strings.Repeat("0", 64)}
+	resp = postJSON("/v1/files/sync/"+invalid.ID+"/manifest", protocol.SyncManifestRequest{Entries: []protocol.SyncManifestEntry{bad}, Final: true}, nil)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("traversal status = %d", resp.StatusCode)
 	}

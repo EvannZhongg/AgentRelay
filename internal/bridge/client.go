@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -25,6 +24,14 @@ type Client struct {
 	HTTP    *http.Client
 }
 
+type responseError struct {
+	status int
+	err    error
+}
+
+func (e *responseError) Error() string { return e.err.Error() }
+func (e *responseError) Unwrap() error { return e.err }
+
 func NewClient(base string) *Client {
 	c := &Client{BaseURL: strings.TrimRight(base, "/"), HTTP: &http.Client{Timeout: 30 * time.Minute}}
 	var local registry
@@ -34,19 +41,27 @@ func NewClient(base string) *Client {
 	return c
 }
 func (c *Client) Do(ctx context.Context, method, path string, in, out any) error {
-	var body io.Reader
+	var data []byte
 	if in != nil {
-		data, err := json.Marshal(in)
+		var err error
+		data, err = json.Marshal(in)
 		if err != nil {
 			return err
 		}
-		body = bytes.NewReader(data)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
+	return c.do(ctx, method, path, "application/json", data, out)
+}
+
+func (c *Client) do(ctx context.Context, method, path, contentType string, body []byte, out any) error {
+	var reader io.Reader
+	if len(body) > 0 {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, reader)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return err
@@ -59,9 +74,9 @@ func (c *Client) Do(ctx context.Context, method, path string, in, out any) error
 	if resp.StatusCode >= 300 {
 		var e protocol.ErrorResponse
 		if json.Unmarshal(data, &e) == nil && e.Error != "" {
-			return errors.New(e.Error)
+			return &responseError{status: resp.StatusCode, err: errors.New(e.Error)}
 		}
-		return fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(data)))
+		return &responseError{status: resp.StatusCode, err: fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(data)))}
 	}
 	if out != nil && len(data) > 0 {
 		return json.Unmarshal(data, out)
@@ -91,16 +106,6 @@ func (c *Client) UpdateDevice(ctx context.Context, id string, req DeviceUpdate) 
 }
 func (c *Client) Exec(ctx context.Context, id string, req protocol.ExecRequest) (out protocol.ExecResponse, err error) {
 	err = c.Do(ctx, "POST", devicePath(id)+"/exec", req, &out)
-	return
-}
-func (c *Client) Sync(ctx context.Context, id string, req protocol.SyncRequest) (out protocol.SyncResponse, err error) {
-	if req.SourcePath != "" {
-		req.SourcePath, err = filepath.Abs(req.SourcePath)
-		if err != nil {
-			return
-		}
-	}
-	err = c.Do(ctx, "POST", devicePath(id)+"/files/sync", req, &out)
 	return
 }
 func (c *Client) StartTask(ctx context.Context, id string, req protocol.TaskRequest) (out protocol.Task, err error) {

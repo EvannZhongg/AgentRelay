@@ -413,12 +413,18 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 413, errors.New("RPC payload exceeds 32 MiB"))
 		return
 	}
-	if endpoint == "/v1/files/sync" && r.Method == "POST" {
-		data, err = s.prepareSync(id, data)
+	if endpoint == "/v1/files/sync/start" && r.Method == "POST" {
+		data, err = s.prepareSyncStart(id, data)
 		if err != nil {
 			writeError(w, 400, err)
 			return
 		}
+	}
+	isSyncCommit := strings.HasPrefix(endpoint, "/v1/files/sync/") && strings.HasSuffix(endpoint, "/commit")
+	var syncMapping []byte
+	if isSyncCommit {
+		syncMapping = append([]byte(nil), data...)
+		data = []byte("{}")
 	}
 	if endpoint == "/v1/exec" || (r.Method == "POST" && (endpoint == "/v1/tasks" || endpoint == "/v1/sessions")) {
 		var fields map[string]json.RawMessage
@@ -440,6 +446,12 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, 502, err)
 		return
+	}
+	if isSyncCommit && resp.Status < http.StatusMultipleChoices {
+		if err := s.persistSyncMapping(id, syncMapping); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 	if strings.Split(endpoint, "?")[0] == "/v1/desktop/capture" && resp.Status == http.StatusOK {
 		resp.Body, err = s.captureArtifact(data, resp.Body)
@@ -523,12 +535,18 @@ func allowed(endpoint, method string) bool {
 	switch endpoint {
 	case "/v1/health", "/v1/device", "/v1/files/read", "/v1/desktop":
 		return method == "GET"
-	case "/v1/exec", "/v1/files/sync", "/v1/desktop/capture", "/v1/desktop/input":
+	case "/v1/exec", "/v1/files/sync/start", "/v1/desktop/capture", "/v1/desktop/input":
 		return method == "POST"
 	case "/v1/tasks", "/v1/sessions":
 		return method == "POST" || method == "GET"
 	}
 	parts := strings.Split(strings.TrimPrefix(endpoint, "/v1/"), "/")
+	if len(parts) >= 3 && parts[0] == "files" && parts[1] == "sync" {
+		if len(parts) == 3 {
+			return method == "DELETE"
+		}
+		return len(parts) == 4 && method == "POST" && (parts[3] == "manifest" || parts[3] == "plan" || parts[3] == "file" || parts[3] == "commit")
+	}
 	if len(parts) < 2 || parts[1] == "" || (parts[0] != "tasks" && parts[0] != "sessions") {
 		return false
 	}
@@ -551,13 +569,10 @@ func mappedDir(mappings map[string]string, dir string) (string, bool) {
 	}
 	return result, best != ""
 }
-func (s *Server) prepareSync(id string, data []byte) ([]byte, error) {
-	var req protocol.SyncRequest
+func (s *Server) prepareSyncStart(id string, data []byte) ([]byte, error) {
+	var req protocol.SyncStartRequest
 	if err := json.Unmarshal(data, &req); err != nil {
 		return nil, err
-	}
-	if req.SourcePath == "" {
-		return data, nil
 	}
 	if !filepath.IsAbs(req.SourcePath) {
 		return nil, errors.New("source_path must be an absolute controller path")
@@ -566,8 +581,8 @@ func (s *Server) prepareSync(id string, data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	rec, ok := s.store.Devices[id]
 	if !ok {
 		return nil, errors.New("device not found")
@@ -583,19 +598,41 @@ func (s *Server) prepareSync(id string, data []byte) ([]byte, error) {
 	if !validRemote(req.Root) {
 		return nil, errors.New("remote root must be workspace-relative")
 	}
-	mappings := map[string]string{}
-	for k, v := range rec.Device.Mappings {
-		mappings[k] = v
+	req.SourcePath = ""
+	return json.Marshal(req)
+}
+
+func (s *Server) persistSyncMapping(id string, data []byte) error {
+	var req protocol.SyncCommitRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		return err
+	}
+	if !filepath.IsAbs(req.SourcePath) || !validRemote(req.Root) {
+		return errors.New("invalid sync mapping")
+	}
+	local, err := filepath.Abs(req.SourcePath)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.store.Devices[id]
+	if !ok {
+		return errors.New("device not found")
+	}
+	previous := rec
+	mappings := make(map[string]string, len(rec.Device.Mappings)+1)
+	for key, value := range rec.Device.Mappings {
+		mappings[key] = value
 	}
 	mappings[local] = req.Root
-	previous := rec
 	rec.Device.Mappings = mappings
 	s.store.Devices[id] = rec
 	if err := s.save(); err != nil {
 		s.store.Devices[id] = previous
-		return nil, err
+		return err
 	}
-	return json.Marshal(req)
+	return nil
 }
 func readJSON(r *http.Request, dst any) error {
 	return json.NewDecoder(io.LimitReader(r.Body, 32<<20)).Decode(dst)

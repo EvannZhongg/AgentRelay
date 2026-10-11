@@ -35,6 +35,7 @@ type Server struct {
 	startedAt time.Time
 	tasks     *taskStore
 	sessions  *sessionStore
+	syncs     *syncStore
 }
 
 func New(cfg Config) (*Server, error) {
@@ -56,7 +57,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Desktop != nil {
 		d = desktop.NewWithBackend(cfg.Desktop)
 	}
-	return &Server{cfg: cfg, desktop: d, startedAt: time.Now(), tasks: newTaskStore(), sessions: newSessionStore()}, nil
+	return &Server{cfg: cfg, desktop: d, startedAt: time.Now(), tasks: newTaskStore(), sessions: newSessionStore(), syncs: newSyncStore(root)}, nil
 }
 
 func (s *Server) Device() protocol.Device {
@@ -75,6 +76,11 @@ func (s *Server) Device() protocol.Device {
 }
 
 func (s *Server) Close() {
+	s.syncs.mu.Lock()
+	for _, session := range s.syncs.values {
+		s.syncs.removeLocked(session)
+	}
+	s.syncs.mu.Unlock()
 	for _, task := range s.tasks.list() {
 		s.tasks.cancel(task.ID)
 	}
@@ -104,7 +110,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/desktop/capture", s.desktopCapture)
 	mux.HandleFunc("/v1/desktop/input", s.desktopInput)
 	mux.HandleFunc("/v1/exec", s.exec)
-	mux.HandleFunc("/v1/files/sync", s.syncFiles)
+	mux.HandleFunc("/v1/files/sync/start", s.syncStart)
+	mux.HandleFunc("/v1/files/sync/", s.syncSession)
 	mux.HandleFunc("/v1/files/read", s.readFile)
 	mux.HandleFunc("/v1/tasks", s.tasksRoot)
 	mux.HandleFunc("/v1/tasks/", s.taskByID)
@@ -195,53 +202,6 @@ func (s *Server) run(parent context.Context, req protocol.ExecRequest) (*protoco
 	}
 	return &protocol.ExecResponse{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: exitCode, DurationMS: time.Since(start).Milliseconds(), TimedOut: timedOut, OutputTruncated: stdout.truncated || stderr.truncated}, nil
 }
-
-func (s *Server) syncFiles(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		methodNotAllowed(w)
-		return
-	}
-	var req protocol.SyncRequest
-	if err := readJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	root, err := pathutil.ResolveUnderRoot(s.cfg.Workspace, req.Root)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	if err := os.MkdirAll(root, 0755); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	result := protocol.SyncResponse{Root: req.Root}
-	for _, file := range req.Files {
-		path, pathErr := pathutil.ResolveUnderRoot(root, file.Path)
-		if pathErr != nil {
-			writeError(w, http.StatusBadRequest, pathErr)
-			return
-		}
-		data, decodeErr := decodeBase64(file.ContentBase64)
-		if decodeErr != nil {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("%s: %w", file.Path, decodeErr))
-			return
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if err := os.WriteFile(path, data, 0644); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		result.Written = append(result.Written, file.Path)
-		result.Bytes += int64(len(data))
-	}
-	writeJSON(w, http.StatusOK, result)
-}
-
-func decodeBase64(v string) ([]byte, error) { return base64.StdEncoding.DecodeString(v) }
 
 func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

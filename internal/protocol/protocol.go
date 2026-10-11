@@ -51,21 +51,76 @@ type ExecResponse struct {
 	TimedOut        bool   `json:"timed_out,omitempty"`
 }
 
-type FileEntry struct {
-	Path          string `json:"path"`
-	ContentBase64 string `json:"content_base64"`
+const (
+	SyncModeUpdate = "update"
+	SyncModeMirror = "mirror"
+)
+
+type SyncManifestEntry struct {
+	Path   string `json:"path"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+	Mode   uint32 `json:"mode,omitempty"`
 }
 
-type SyncRequest struct {
-	SourcePath string      `json:"source_path,omitempty"`
-	Root       string      `json:"root,omitempty"`
-	Files      []FileEntry `json:"files"`
+type SyncIgnorePattern struct {
+	Pattern string   `json:"pattern"`
+	Domain  []string `json:"domain,omitempty"`
+}
+
+type SyncStartRequest struct {
+	SourcePath string `json:"source_path,omitempty"`
+	Root       string `json:"root,omitempty"`
+	Mode       string `json:"mode"`
+}
+
+type SyncStartResponse struct {
+	ID             string    `json:"id"`
+	Root           string    `json:"root"`
+	ChunkSizeBytes int64     `json:"chunk_size_bytes"`
+	ExpiresAt      time.Time `json:"expires_at"`
+}
+
+type SyncManifestRequest struct {
+	Entries []SyncManifestEntry `json:"entries"`
+	Ignore  []SyncIgnorePattern `json:"ignore,omitempty"`
+	Final   bool                `json:"final,omitempty"`
+}
+
+type SyncManifestResponse struct {
+	Received int `json:"received"`
+}
+
+type SyncPlanResponse struct {
+	Upload         []string `json:"upload"`
+	Delete         []string `json:"delete,omitempty"`
+	Unchanged      int      `json:"unchanged"`
+	UnchangedBytes int64    `json:"unchanged_bytes"`
+}
+
+type SyncCommitRequest struct {
+	SourcePath string `json:"source_path"`
+	Root       string `json:"root"`
+}
+
+type SyncCommitResponse struct {
+	Uploaded      int   `json:"uploaded"`
+	Deleted       int   `json:"deleted"`
+	UploadedBytes int64 `json:"uploaded_bytes"`
 }
 
 type SyncResponse struct {
-	Root    string   `json:"root"`
-	Written []string `json:"written"`
-	Bytes   int64    `json:"bytes"`
+	Root           string   `json:"root"`
+	Scanned        int      `json:"scanned"`
+	Ignored        int      `json:"ignored"`
+	Uploaded       int      `json:"uploaded"`
+	Unchanged      int      `json:"unchanged"`
+	Deleted        int      `json:"deleted"`
+	UploadedBytes  int64    `json:"uploaded_bytes"`
+	UnchangedBytes int64    `json:"unchanged_bytes"`
+	DurationMS     int64    `json:"duration_ms"`
+	DryRun         bool     `json:"dry_run,omitempty"`
+	Warnings       []string `json:"warnings,omitempty"`
 }
 
 type ReadResponse struct {

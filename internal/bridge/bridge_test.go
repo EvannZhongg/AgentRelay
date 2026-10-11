@@ -3,10 +3,13 @@ package bridge_test
 import (
 	"context"
 	"encoding/base64"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"AgentRelay/internal/filesync"
 	"AgentRelay/internal/protocol"
 	"AgentRelay/internal/testutil"
 )
@@ -34,11 +37,15 @@ func TestBridgePairsAndCallsOutboundWorker(t *testing.T) {
 	if !strings.Contains(result.Stdout, "proxy-ok") {
 		t.Fatalf("stdout = %q", result.Stdout)
 	}
-	_, err = client.Sync(context.Background(), device.ID, protocol.SyncRequest{Files: []protocol.FileEntry{{Path: "a.txt", ContentBase64: base64.StdEncoding.EncodeToString([]byte("a"))}}})
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "a.txt"), []byte("a"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	synced, err := client.Sync(context.Background(), device.ID, filesync.Options{SourcePath: source, Root: "project", Mode: protocol.SyncModeUpdate, UseGitIgnore: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	file, err := client.ReadFile(context.Background(), device.ID, "a.txt")
+	file, err := client.ReadFile(context.Background(), device.ID, synced.Root+"/a.txt")
 	if err != nil {
 		t.Fatal(err)
 	}

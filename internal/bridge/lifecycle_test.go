@@ -2,16 +2,17 @@ package bridge_test
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"net"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"AgentRelay/internal/bridge"
+	"AgentRelay/internal/filesync"
 	"AgentRelay/internal/protocol"
 	"AgentRelay/internal/state"
 	"AgentRelay/internal/testutil"
@@ -52,7 +53,13 @@ func TestBridgeRestartPreservesIdentityMappingsAndWorkerProcesses(t *testing.T) 
 		t.Fatal(err)
 	}
 	local := t.TempDir()
-	synced, err := relay.Client.Sync(ctx, relay.Device.ID, protocol.SyncRequest{SourcePath: local, Files: []protocol.FileEntry{{Path: "sub/input.txt", ContentBase64: base64.StdEncoding.EncodeToString([]byte("persisted-map"))}}})
+	if err := os.MkdirAll(filepath.Join(local, "sub"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(local, "sub", "input.txt"), []byte("persisted-map"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	synced, err := relay.Client.Sync(ctx, relay.Device.ID, filesync.Options{SourcePath: local, Mode: protocol.SyncModeUpdate, UseGitIgnore: true})
 	if err != nil {
 		t.Fatal(err)
 	}

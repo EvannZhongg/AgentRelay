@@ -3,18 +3,16 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"AgentRelay/internal/bridge"
+	"AgentRelay/internal/filesync"
 	"AgentRelay/internal/protocol"
 )
 
@@ -42,7 +40,7 @@ func (e *rpcError) Error() string { return e.Message }
 const (
 	currentProtocolVersion = "2025-06-18"
 	serverName             = "AgentRelay"
-	serverVersion          = "0.1.1"
+	serverVersion          = "0.2.0"
 )
 
 func main() {
@@ -162,11 +160,14 @@ func toolDefinitions() []map[string]any {
 				"env": map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")}, "timeout_ms": map[string]any{"type": "integer", "minimum": 1, "description": "Execution timeout in milliseconds."},
 			}, "required": []string{"device_id", "command"},
 		}},
-		{"name": "device_sync", "description": "Synchronize files from the control workspace or explicit file entries to a device.", "inputSchema": map[string]any{
+		{"name": "device_sync", "description": "Incrementally synchronize a local directory to a device using ignore rules, checksums and bounded chunks.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false, "properties": map[string]any{
-				"device_id": stringProperty("Paired device ID."), "root": stringProperty("Remote root; automatically mapped from source_path when omitted."), "source_path": stringProperty("Local project to upload and persist its workspace mapping."),
-				"files": map[string]any{"type": "array", "description": "Explicit files when source_path is omitted.", "items": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"path": stringProperty("Workspace-relative file path."), "content_base64": stringProperty("File content encoded as base64.")}, "required": []string{"path", "content_base64"}}},
-			}, "required": []string{"device_id"},
+				"device_id": stringProperty("Paired device ID."), "root": stringProperty("Remote root; automatically mapped from source_path when omitted."), "source_path": stringProperty("Local directory to synchronize and map to the remote root."),
+				"mode":          map[string]any{"type": "string", "enum": []string{"update", "mirror"}, "description": "update keeps remote extras; mirror deletes files managed by an earlier sync but now absent."},
+				"exclude":       map[string]any{"type": "array", "items": stringProperty("Gitignore-compatible exclusion pattern; prefix with ! to re-include."), "description": "Additional gitignore-compatible patterns."},
+				"use_gitignore": map[string]any{"type": "boolean", "description": "Apply nested .gitignore files; defaults to true."},
+				"dry_run":       map[string]any{"type": "boolean", "description": "Plan the synchronization without changing the device."},
+			}, "required": []string{"device_id", "source_path"},
 		}},
 		{"name": "device_pull", "description": "Read remote files or test results from a device workspace.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false, "properties": map[string]any{"device_id": stringProperty("Registered device ID."), "path": stringProperty("One remote workspace-relative file path."), "paths": map[string]any{"type": "array", "items": stringProperty("Remote file path.")}}, "required": []string{"device_id"},
@@ -239,11 +240,23 @@ func callTool(ctx context.Context, client *bridge.Client, raw json.RawMessage) (
 		if err != nil {
 			return nil, err
 		}
-		files, err := syncFiles(call.Arguments)
+		source, err := requiredString(call.Arguments, "source_path")
 		if err != nil {
 			return nil, err
 		}
-		result, err := client.Sync(ctx, id, protocol.SyncRequest{SourcePath: optionalString(call.Arguments, "source_path"), Root: optionalString(call.Arguments, "root"), Files: files})
+		mode := optionalString(call.Arguments, "mode")
+		if mode == "" {
+			mode = protocol.SyncModeUpdate
+		}
+		useGitIgnore, err := optionalBool(call.Arguments, "use_gitignore", true)
+		if err != nil {
+			return nil, err
+		}
+		dryRun, err := optionalBool(call.Arguments, "dry_run", false)
+		if err != nil {
+			return nil, err
+		}
+		result, err := client.Sync(ctx, id, filesync.Options{SourcePath: source, Root: optionalString(call.Arguments, "root"), Mode: mode, UseGitIgnore: useGitIgnore, Exclude: stringSlice(call.Arguments["exclude"]), DryRun: dryRun})
 		return toolJSON(result), err
 	case "device_pull":
 		id, err := requiredString(call.Arguments, "device_id")
@@ -367,66 +380,23 @@ func callSession(ctx context.Context, client *bridge.Client, args map[string]any
 	}
 }
 
-func syncFiles(args map[string]any) ([]protocol.FileEntry, error) {
-	if source := optionalString(args, "source_path"); source != "" {
-		return collectFiles(source)
-	}
-	raw, ok := args["files"]
-	if !ok {
-		return nil, errors.New("device_sync requires source_path or files")
-	}
-	data, err := json.Marshal(raw)
-	if err != nil {
-		return nil, err
-	}
-	var files []protocol.FileEntry
-	if err := json.Unmarshal(data, &files); err != nil {
-		return nil, fmt.Errorf("files must contain path and content_base64: %w", err)
-	}
-	for i := range files {
-		if _, err := base64.StdEncoding.DecodeString(files[i].ContentBase64); err != nil {
-			return nil, fmt.Errorf("files[%d] content_base64: %w", i, err)
-		}
-	}
-	return files, nil
-}
-
-func collectFiles(source string) ([]protocol.FileEntry, error) {
-	info, err := os.Stat(source)
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() {
-		return nil, errors.New("source_path must be a directory")
-	}
-	files := make([]protocol.FileEntry, 0)
-	err = filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		files = append(files, protocol.FileEntry{Path: filepath.ToSlash(rel), ContentBase64: base64.StdEncoding.EncodeToString(data)})
-		return nil
-	})
-	return files, err
-}
-
 func requiredString(args map[string]any, key string) (string, error) {
 	value := optionalString(args, key)
 	if value == "" {
 		return "", fmt.Errorf("%s is required", key)
 	}
 	return value, nil
+}
+func optionalBool(args map[string]any, key string, defaultValue bool) (bool, error) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return defaultValue, nil
+	}
+	result, ok := value.(bool)
+	if !ok {
+		return false, fmt.Errorf("%s must be a boolean", key)
+	}
+	return result, nil
 }
 func optionalString(args map[string]any, key string) string {
 	value, _ := args[key].(string)
