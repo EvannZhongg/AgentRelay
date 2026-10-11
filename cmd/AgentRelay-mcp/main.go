@@ -42,7 +42,7 @@ func (e *rpcError) Error() string { return e.Message }
 const (
 	currentProtocolVersion = "2025-06-18"
 	serverName             = "AgentRelay"
-	serverVersion          = "0.1.0"
+	serverVersion          = "0.1.1"
 )
 
 func main() {
