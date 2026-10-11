@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AgentRelay Device Registry</title>
+<style>
+:root{color-scheme:dark;font:14px system-ui,-apple-system,"Segoe UI",sans-serif;background:#111827;color:#e5e7eb}body{margin:0;padding:28px;max-width:1200px;margin-inline:auto}h1{margin:0 0 6px;font-size:24px}p{color:#9ca3af}.toolbar{display:flex;gap:10px;align-items:center;margin:20px 0;flex-wrap:wrap}button,input,textarea{font:inherit;border:1px solid #374151;border-radius:6px;background:#1f2937;color:#f9fafb;padding:8px}button{cursor:pointer;background:#2563eb;border:0}button.secondary{background:#374151}button.danger{background:#b91c1c}button:disabled{opacity:.45;cursor:wait}.card{background:#1f2937;border:1px solid #374151;border-radius:10px;padding:16px;margin:12px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:7px 0}.label{color:#9ca3af;min-width:120px}.status{font-weight:600}.online{color:#34d399}.offline{color:#fbbf24}.revoked{color:#f87171}.small{font-size:12px;color:#9ca3af;word-break:break-all}textarea{width:100%;min-height:70px;box-sizing:border-box}#message{min-height:20px;color:#fbbf24}.pending{border-left:4px solid #f59e0b}.empty{color:#9ca3af;text-align:center;padding:30px}
+</style></head>
+<body>
+<h1>AgentRelay Device Registry</h1>
+<p>设备状态、别名、配对、Workspace 映射和桌面控制权限都来自同一个 Bridge 注册表。Agent 使用持久化短句柄或别名选择设备。</p>
+<div class="toolbar"><button onclick="refresh()">刷新</button><span id="message"></span></div>
+<h2>待处理配对</h2><div id="pairings"></div>
+<h2>已注册设备</h2><div id="devices" class="grid"></div>
+<script>
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const api=(path,opt={})=>fetch(path,{headers:{'Content-Type':'application/json',...(opt.headers||{})},...opt}).then(async r=>{let x=await r.text();if(!r.ok)throw Error(x||r.statusText);return x?JSON.parse(x):null});
+function message(x){document.querySelector('#message').textContent=x||''}
+async function refresh(){try{message('加载中…');let [ds,ps]=await Promise.all([api('/v1/devices'),api('/v1/pair-requests')]);renderPairs(ps);renderDevices(ds);message('')}catch(e){message(e.message)}}
+function renderPairs(ps){let el=document.querySelector('#pairings');if(!ps.length){el.innerHTML='<div class="empty">没有待处理配对请求</div>';return}el.innerHTML=ps.map(p=>`<div class="card pending"><div><b>${esc(p.device.name)}</b> · ${esc(p.device.workspace)}</div><div class="small">验证数字：${esc(p.verification)} · 请求 ${esc(p.id)}</div><div class="row"><button onclick="decide('${esc(p.id)}',true)">批准</button><button class="danger" onclick="decide('${esc(p.id)}',false)">拒绝</button></div></div>`).join('')}
+async function decide(id,ok){try{await api('/v1/pair-requests/'+encodeURIComponent(id)+'/'+(ok?'approve':'reject'),{method:'POST'});await refresh()}catch(e){message(e.message)}}
+function renderDevices(ds){let el=document.querySelector('#devices');if(!ds.length){el.innerHTML='<div class="empty">还没有配对设备</div>';return}ds.sort((a,b)=>(a.name||'').localeCompare(b.name||'')||a.id.localeCompare(b.id));el.innerHTML=ds.map(d=>card(d)).join('')}
+function card(d){let map=Object.entries(d.workspace_mappings||{}).map(([a,b])=>a+'='+b).join('\n');let desktop=d.desktop_access==='revoked'?'revoked':'granted';return `<div class="card"><div class="row"><h3 style="margin:0">${esc(d.handle||d.name)} · ${esc(d.name)}</h3><span class="status ${d.online?'online':'offline'}">${d.online?'在线':'离线'}</span>${d.authorized?'':'<span class="status revoked">已撤销</span>'}</div><div class="small">系统：${esc(d.os)} ${esc(d.os_version)} · Workspace：${esc(d.workspace)}</div><div class="row"><label class="label">别名</label><input id="name-${esc(d.id)}" value="${esc(d.name)}"></div><div class="row"><label class="label">桌面控制</label><select id="desktop-${esc(d.id)}"><option value="granted" ${desktop==='granted'?'selected':''}>允许</option><option value="revoked" ${desktop==='revoked'?'selected':''}>禁止</option></select></div><label class="label">Workspace 映射（每行 absolute-local=remote-relative）</label><textarea id="map-${esc(d.id)}">${esc(map)}</textarea><div class="row"><button onclick="save('${esc(d.id)}')">保存</button><button class="secondary" onclick="toggle('${esc(d.id)}',${!d.authorized})">${d.authorized?'撤销授权':'恢复授权'}</button><button class="danger" onclick="removeDevice('${esc(d.id)}')">移除设备</button></div></div>`}
+function parseMap(text){let out={};for(let line of text.split(/\r?\n/)){line=line.trim();if(!line)continue;let i=line.indexOf('=');if(i<1)throw Error('Workspace 映射格式应为 local=remote');out[line.slice(0,i).trim()]=line.slice(i+1).trim()}return out}
+async function save(id){try{await api('/v1/devices/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({name:document.querySelector('#name-'+CSS.escape(id)).value,desktop_access:document.querySelector('#desktop-'+CSS.escape(id)).value,workspace_mappings:parseMap(document.querySelector('#map-'+CSS.escape(id)).value)})});await refresh()}catch(e){message(e.message)}}
+async function toggle(id,authorized){try{await api('/v1/devices/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({authorized})});await refresh()}catch(e){message(e.message)}}
+async function removeDevice(id){if(!confirm('移除后需要重新配对，确定继续？'))return;try{await api('/v1/devices/'+encodeURIComponent(id),{method:'DELETE'});await refresh()}catch(e){message(e.message)}}
+refresh();setInterval(refresh,5000);
+</script></body></html>

@@ -17,7 +17,7 @@ func desktopToolDefinitions() []map[string]any {
 	integer := func(description string) map[string]any {
 		return map[string]any{"type": "integer", "description": description}
 	}
-	device := str("Paired device ID.")
+	device := str("Persistent device handle or alias. Do not use the private device ID.")
 	return []map[string]any{
 		{"name": "device_desktop", "description": "Inspect native desktop access, permissions, connected monitors and global bounds. Windows coordinates use physical pixels; macOS uses points. Display indices can change when monitors reconnect.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"device_id": device}, "required": []string{"device_id"}}, "annotations": map[string]any{"readOnlyHint": true}},
 		{"name": "device_capture", "description": "Capture a device display. Returns a standard MCP PNG image and monitor metadata. The full-resolution original is saved as a controller-local artifact with path, dimensions and SHA256. Use returned width/height as reference_width/reference_height with device_input display_id to click preview pixels.", "inputSchema": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{

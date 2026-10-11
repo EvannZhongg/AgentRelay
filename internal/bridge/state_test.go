@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"AgentRelay/internal/protocol"
+	"AgentRelay/internal/state"
 	"bytes"
 	"encoding/json"
 	"net/http/httptest"
@@ -10,6 +11,35 @@ import (
 	"testing"
 	"time"
 )
+
+func TestMissingDeviceHandlesAreBackfilled(t *testing.T) {
+	filename := filepath.Join(t.TempDir(), "bridge.json")
+	initial := registry{Devices: map[string]record{
+		"private-id": {Device: protocol.Device{ID: "private-id", Name: "laptop", Workspace: t.TempDir()}},
+	}}
+	data, err := json.Marshal(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filename, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(Config{StatePath: filename})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := s.store.Devices["private-id"].Device.Handle
+	if handle == "" {
+		t.Fatal("missing device handle was not backfilled")
+	}
+	var saved registry
+	if err := state.Load(filename, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Devices["private-id"].Device.Handle != handle {
+		t.Fatalf("backfilled handle was not persisted: %q vs %q", saved.Devices["private-id"].Device.Handle, handle)
+	}
+}
 
 func TestExpiredPairingCannotCreateDevice(t *testing.T) {
 	s, err := New(Config{StatePath: filepath.Join(t.TempDir(), "bridge.json")})

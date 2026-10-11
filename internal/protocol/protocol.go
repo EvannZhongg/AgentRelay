@@ -5,18 +5,20 @@ import "time"
 const APIVersion = "v1"
 
 type Device struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	OS           string            `json:"os"`
-	OSVersion    string            `json:"os_version,omitempty"`
-	Architecture string            `json:"architecture"`
-	Authorized   bool              `json:"authorized"`
-	Workspace    string            `json:"workspace"`
-	Mappings     map[string]string `json:"workspace_mappings,omitempty"`
-	Capabilities Capabilities      `json:"capabilities"`
-	Metadata     map[string]string `json:"metadata,omitempty"`
-	LastSeen     time.Time         `json:"last_seen"`
-	Online       bool              `json:"online"`
+	ID            string            `json:"id"`
+	Handle        string            `json:"handle,omitempty"`
+	Name          string            `json:"name"`
+	OS            string            `json:"os"`
+	OSVersion     string            `json:"os_version,omitempty"`
+	Architecture  string            `json:"architecture"`
+	Authorized    bool              `json:"authorized"`
+	DesktopAccess string            `json:"desktop_access,omitempty"`
+	Workspace     string            `json:"workspace"`
+	Mappings      map[string]string `json:"workspace_mappings,omitempty"`
+	Capabilities  Capabilities      `json:"capabilities"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	LastSeen      time.Time         `json:"last_seen"`
+	Online        bool              `json:"online"`
 }
 
 type Capabilities struct {

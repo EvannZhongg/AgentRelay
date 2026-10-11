@@ -31,7 +31,7 @@ go build -o AgentRelay.exe ./cmd/AgentRelay
 go build -ldflags "-H=windowsgui" -o AgentRelay-mcp.exe ./cmd/AgentRelay-mcp
 ```
 
-1. On the controller, run `AgentRelay setup` and choose `controller`. Keep it running; it starts the Bridge and waits for pairing requests.
+1. On the controller, run `AgentRelay gui` to start the Bridge, enable LAN discovery, and open the device management UI. `AgentRelay setup` with `controller` remains available for terminal-only operation.
 2. On the target computer, run `AgentRelay setup` and choose `worker`. Select the discovered controller, choose a workspace folder and set a device alias.
 3. Compare the verification number shown on both computers, then approve the request in the controller terminal. The Worker saves its credentials and reconnects automatically.
 4. On later starts, use `AgentRelay bridge serve` on the controller and `AgentRelay worker serve` on the target. `start-bridge.bat` and `start-worker.bat` are Windows shortcuts.
@@ -56,14 +56,16 @@ Find paired devices, sync a project, run a command and collect a result:
 
 ```powershell
 AgentRelay device list
-AgentRelay sync --device <id> --source C:\src\project
-AgentRelay sync --device <id> --source C:\src\project --mode mirror --exclude .cache/
-AgentRelay exec --device <id> --dir C:\src\project "dotnet test"
-AgentRelay task start --device <id> --dir C:\src\project --timeout-ms 60000 "npm run build"
-AgentRelay task get --device <id> --id <task-id>
-AgentRelay task retrieve --device <id> --id <task-id>
-AgentRelay pull --device <id> --out .\results <remote-root>\report.txt
+AgentRelay sync --device build-machine --source C:\src\project
+AgentRelay sync --device build-machine --source C:\src\project --mode mirror --exclude .cache/
+AgentRelay exec --device build-machine --dir C:\src\project "dotnet test"
+AgentRelay task start --device build-machine --dir C:\src\project --timeout-ms 60000 "npm run build"
+AgentRelay task get --device build-machine --id <task-id>
+AgentRelay task retrieve --device build-machine --id <task-id>
+AgentRelay pull --device build-machine --out .\results <remote-root>\report.txt
 ```
+
+`device_list` exposes a persistent short handle generated at pairing time (for example `dev-a1b2c3d4`), aliases, status and capabilities, without exposing private device IDs. The required `device_id` argument accepts either a handle or an alias. Disconnects, reconnects, and adding or removing devices do not change the handle.
 
 Use sessions for long-lived shell processes:
 
@@ -79,10 +81,10 @@ Remote paths are relative to the Worker's authorized workspace. `sync` compares 
 Manage authorization without pairing again:
 
 ```powershell
-AgentRelay device rename --device <id> --name build-machine
-AgentRelay device revoke --device <id>
-AgentRelay device authorize --device <id>
-AgentRelay device remove --device <id>
+AgentRelay device rename --device dev-a1b2c3d4 --name build-machine
+AgentRelay device revoke --device build-machine
+AgentRelay device authorize --device build-machine
+AgentRelay device remove --device build-machine
 ```
 
 ## Desktop Access

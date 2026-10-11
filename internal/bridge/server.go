@@ -91,9 +91,19 @@ func New(cfg Config) (*Server, error) {
 	if _, err := s.store.Identity.TLS(); err != nil {
 		return nil, err
 	}
+	stateChanged := false
 	for id, rec := range s.store.Devices {
 		rec.Device.Online = false
+		if strings.TrimSpace(rec.Device.Handle) == "" {
+			rec.Device.Handle = s.newDeviceHandleLocked()
+			stateChanged = true
+		}
 		s.store.Devices[id] = rec
+	}
+	if stateChanged {
+		if err := s.save(); err != nil {
+			return nil, fmt.Errorf("save device handles: %w", err)
+		}
 	}
 	return s, nil
 }
@@ -112,6 +122,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/pair", s.pair)
 	mux.HandleFunc("/v1/pair/", s.pairStatus)
 	mux.HandleFunc("/v1/connect", s.connect)
+	mux.HandleFunc("/ui", serveUI)
+	mux.HandleFunc("/ui/", serveUI)
 	admin := http.NewServeMux()
 	admin.HandleFunc("/v1/pair-requests", s.pairRequests)
 	admin.HandleFunc("/v1/pair-requests/", s.pairRequestAction)
@@ -120,7 +132,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
 		ip := net.ParseIP(host)
-		if err != nil || ip == nil || !ip.IsLoopback() || r.Header.Get("Origin") != "" {
+		if err != nil || ip == nil || !ip.IsLoopback() || !sameOrigin(r) {
 			writeError(w, 403, errors.New("controller API is local only"))
 			return
 		}
@@ -153,8 +165,8 @@ func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err)
 		return
 	}
-	if req.Device.Workspace == "" || req.Device.Name == "" {
-		writeError(w, 400, errors.New("device name and workspace are required"))
+	if req.Device.Workspace == "" || !validAlias(req.Device.Name) {
+		writeError(w, 400, errors.New("device alias and workspace are required; alias cannot contain path separators"))
 		return
 	}
 	s.mu.Lock()
@@ -256,7 +268,13 @@ func (s *Server) pairRequestAction(w http.ResponseWriter, r *http.Request) {
 	id, token := transport.Token(), transport.Token()
 	d := pending.request.Device
 	d.ID = id
+	d.Handle = s.newDeviceHandleLocked()
+	if strings.EqualFold(strings.TrimSpace(d.Name), d.Handle) || !s.aliasAvailableLocked(d.Name, "") {
+		writeError(w, http.StatusConflict, errors.New("device alias is already in use"))
+		return
+	}
 	d.Authorized = true
+	d.DesktopAccess = "granted"
 	d.Online = false
 	d.LastSeen = time.Time{}
 	d.Mappings = map[string]string{}
@@ -373,9 +391,10 @@ func (s *Server) devicesRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 type DeviceUpdate struct {
-	Name       *string           `json:"name,omitempty"`
-	Authorized *bool             `json:"authorized,omitempty"`
-	Mappings   map[string]string `json:"workspace_mappings,omitempty"`
+	Name          *string           `json:"name,omitempty"`
+	Authorized    *bool             `json:"authorized,omitempty"`
+	DesktopAccess *string           `json:"desktop_access,omitempty"`
+	Mappings      map[string]string `json:"workspace_mappings,omitempty"`
 }
 
 func validRemote(value string) bool {
@@ -390,15 +409,37 @@ func validRemote(value string) bool {
 	}
 	return true
 }
+
+func validAlias(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "." || value == ".." || strings.ContainsAny(value, "/\\\r\n\t") {
+		return false
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
 func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/devices/"), "/"), "/")
-	id := parts[0]
+	selector := parts[0]
 	s.mu.RLock()
+	devices := make([]protocol.Device, 0, len(s.store.Devices))
+	for _, item := range s.store.Devices {
+		devices = append(devices, item.Device)
+	}
+	id, resolveErr := ResolveDeviceSelector(devices, selector)
 	rec, ok := s.store.Devices[id]
 	peer := s.connections[id]
 	s.mu.RUnlock()
-	if !ok {
-		writeError(w, 404, errors.New("device not found"))
+	if resolveErr != nil || !ok {
+		if resolveErr != nil {
+			writeError(w, 404, resolveErr)
+		} else {
+			writeError(w, 404, errors.New("device not found"))
+		}
 		return
 	}
 	if len(parts) == 1 {
@@ -420,6 +461,10 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(endpoint, "/v1/desktop") && (rec.Device.Capabilities.Desktop == nil || !rec.Device.Capabilities.Desktop.Supported) {
 		writeError(w, http.StatusNotImplemented, errors.New("worker does not advertise desktop capability; update the worker"))
+		return
+	}
+	if strings.HasPrefix(endpoint, "/v1/desktop") && rec.Device.DesktopAccess == "revoked" {
+		writeError(w, http.StatusForbidden, errors.New("desktop control permission is revoked"))
 		return
 	}
 	data, err := io.ReadAll(io.LimitReader(r.Body, (32<<20)+1))
@@ -513,8 +558,8 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request, id string)
 			writeError(w, 400, err)
 			return
 		}
-		if update.Name != nil && strings.TrimSpace(*update.Name) == "" {
-			writeError(w, 400, errors.New("name is required"))
+		if update.Name != nil && !validAlias(*update.Name) {
+			writeError(w, 400, errors.New("name is required and cannot contain path separators"))
 			return
 		}
 		for local, remote := range update.Mappings {
@@ -536,10 +581,24 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request, id string)
 		delete(s.store.Devices, id)
 	} else {
 		if update.Name != nil {
+			if !s.aliasAvailableLocked(*update.Name, id) {
+				s.mu.Unlock()
+				writeError(w, http.StatusConflict, errors.New("device alias is already in use"))
+				return
+			}
 			rec.Device.Name = *update.Name
 		}
 		if update.Authorized != nil {
 			rec.Device.Authorized = *update.Authorized
+		}
+		if update.DesktopAccess != nil {
+			access := strings.ToLower(strings.TrimSpace(*update.DesktopAccess))
+			if access != "granted" && access != "revoked" {
+				s.mu.Unlock()
+				writeError(w, 400, errors.New("desktop_access must be granted or revoked"))
+				return
+			}
+			rec.Device.DesktopAccess = access
 		}
 		if update.Mappings != nil {
 			rec.Device.Mappings = update.Mappings
@@ -570,6 +629,36 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request, id string)
 		w.WriteHeader(204)
 	} else {
 		writeJSON(w, 200, rec.Device)
+	}
+}
+
+func (s *Server) aliasAvailableLocked(name, exceptID string) bool {
+	name = strings.TrimSpace(name)
+	for id, rec := range s.store.Devices {
+		if strings.EqualFold(strings.TrimSpace(rec.Device.Handle), name) {
+			return false
+		}
+		if id != exceptID && strings.EqualFold(strings.TrimSpace(rec.Device.Name), name) {
+			return false
+		}
+	}
+	return name != ""
+}
+
+func (s *Server) newDeviceHandleLocked() string {
+	for {
+		token := transport.Token()
+		handle := "dev-" + token[:8]
+		used := false
+		for _, rec := range s.store.Devices {
+			if strings.EqualFold(rec.Device.Handle, handle) {
+				used = true
+				break
+			}
+		}
+		if !used {
+			return handle
+		}
 	}
 }
 func allowed(endpoint, method string) bool {

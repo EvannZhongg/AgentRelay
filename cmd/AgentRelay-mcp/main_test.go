@@ -83,9 +83,9 @@ func TestMCPDevelopmentWorkflow(t *testing.T) {
 			}
 		}
 	}
-	var devices []protocol.Device
+	var devices []map[string]any
 	call("device_list", map[string]any{}, &devices)
-	if len(devices) != 1 || !devices[0].Capabilities.Sessions {
+	if len(devices) != 1 || devices[0]["handle"] == "" || devices[0]["authorized"] != true {
 		t.Fatalf("devices = %+v", devices)
 	}
 	source := t.TempDir()
@@ -175,7 +175,7 @@ func TestMCPDevelopmentWorkflow(t *testing.T) {
 	relay.Peer.Close()
 	testutil.WaitOffline(t, client, device.ID)
 	call("device_list", map[string]any{}, &devices)
-	if len(devices) != 1 || devices[0].ID != device.ID || devices[0].Online || devices[0].LastSeen.IsZero() {
+	if len(devices) != 1 || devices[0]["handle"] == "" || devices[0]["online"] != false {
 		t.Fatalf("offline worker missing from catalog: %+v", devices)
 	}
 }

@@ -152,17 +152,17 @@ func toolDefinitions() []map[string]any {
 		return map[string]any{"type": "string", "description": description}
 	}
 	return append([]map[string]any{
-		{"name": "device_list", "description": "List paired devices, aliases, authorization, workspace mappings, capabilities and connection status. Offline entries remain visible.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
-		{"name": "device_exec", "description": "Execute a command on a device workspace and return stdout, stderr and exit status.", "inputSchema": map[string]any{
+		{"name": "device_list", "description": "List paired devices using persistent handles and aliases, authorization, workspace mappings, capabilities and connection status. Private device IDs are omitted; offline entries remain visible.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
+		{"name": "device_exec", "description": "Execute a command on a device selected by a persistent handle or alias and return stdout, stderr and exit status.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false,
 			"properties": map[string]any{
-				"device_id": stringProperty("Paired device ID."), "command": stringProperty("Native shell command."), "working_dir": stringProperty("Mapped local project directory or workspace-relative remote directory."),
+				"device_id": stringProperty("Persistent device handle or alias. Do not use the private device ID."), "command": stringProperty("Native shell command."), "working_dir": stringProperty("Mapped local project directory or workspace-relative remote directory."),
 				"env": map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")}, "timeout_ms": map[string]any{"type": "integer", "minimum": 1, "description": "Execution timeout in milliseconds."},
 			}, "required": []string{"device_id", "command"},
 		}},
 		{"name": "device_sync", "description": "Incrementally synchronize a local directory to a device using ignore rules, checksums and bounded chunks.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false, "properties": map[string]any{
-				"device_id": stringProperty("Paired device ID."), "root": stringProperty("Remote root; automatically mapped from source_path when omitted."), "source_path": stringProperty("Local directory to synchronize and map to the remote root."),
+				"device_id": stringProperty("Persistent device handle or alias."), "root": stringProperty("Remote root; automatically mapped from source_path when omitted."), "source_path": stringProperty("Local directory to synchronize and map to the remote root."),
 				"mode":          map[string]any{"type": "string", "enum": []string{"update", "mirror"}, "description": "update keeps remote extras; mirror deletes files managed by an earlier sync but now absent."},
 				"exclude":       map[string]any{"type": "array", "items": stringProperty("Gitignore-compatible exclusion pattern; prefix with ! to re-include."), "description": "Additional gitignore-compatible patterns."},
 				"use_gitignore": map[string]any{"type": "boolean", "description": "Apply nested .gitignore files; defaults to true."},
@@ -170,17 +170,17 @@ func toolDefinitions() []map[string]any {
 			}, "required": []string{"device_id", "source_path"},
 		}},
 		{"name": "device_pull", "description": "Read remote files or test results from a device workspace.", "inputSchema": map[string]any{
-			"type": "object", "additionalProperties": false, "properties": map[string]any{"device_id": stringProperty("Registered device ID."), "path": stringProperty("One remote workspace-relative file path."), "paths": map[string]any{"type": "array", "items": stringProperty("Remote file path.")}}, "required": []string{"device_id"},
+			"type": "object", "additionalProperties": false, "properties": map[string]any{"device_id": stringProperty("Persistent device handle or alias."), "path": stringProperty("One remote workspace-relative file path."), "paths": map[string]any{"type": "array", "items": stringProperty("Remote file path.")}}, "required": []string{"device_id"},
 		}},
 		{"name": "device_task", "description": "Start, list, query or cancel a task. get retains the record; retrieve returns a finished task and deletes its record, and fails while the task is running.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false, "properties": map[string]any{
-				"action": map[string]any{"type": "string", "enum": []string{"start", "list", "get", "cancel", "retrieve"}}, "device_id": stringProperty("Paired device ID."), "task_id": stringProperty("Task ID for get, cancel, or retrieve."), "command": stringProperty("Command for start."), "working_dir": stringProperty("Mapped local project or workspace-relative directory."), "env": map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")}, "timeout_ms": map[string]any{"type": "integer", "minimum": 1},
+				"action": map[string]any{"type": "string", "enum": []string{"start", "list", "get", "cancel", "retrieve"}}, "device_id": stringProperty("Persistent device handle or alias."), "task_id": stringProperty("Task ID for get, cancel, or retrieve."), "command": stringProperty("Command for start."), "working_dir": stringProperty("Mapped local project directory or workspace-relative directory."), "env": map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")}, "timeout_ms": map[string]any{"type": "integer", "minimum": 1},
 			}, "required": []string{"device_id", "action"},
 		}},
 		{"name": "device_session", "description": "Create, list, poll, send input to, or close a persistent shell session. Output is cumulative; send returns immediately, so poll get for new output. This is a pipe-based shell, not a PTY.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false, "properties": map[string]any{
 				"action":    map[string]any{"type": "string", "enum": []string{"create", "list", "get", "send", "close"}},
-				"device_id": stringProperty("Registered device ID."), "session_id": stringProperty("Session ID for get, send, or close."),
+				"device_id": stringProperty("Persistent device handle or alias."), "session_id": stringProperty("Session ID for get, send, or close."),
 				"command": stringProperty("Optional initial shell command for create."), "working_dir": stringProperty("Mapped local project or workspace-relative directory for create."),
 				"env":   map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")},
 				"input": stringProperty("Exact stdin text for send. Include a newline to execute a shell command; multiline PowerShell blocks need a final blank line."),
@@ -218,7 +218,7 @@ func callTool(ctx context.Context, client *bridge.Client, raw json.RawMessage) (
 		return callDesktop(ctx, client, call.Name, call.Arguments)
 	case "device_list":
 		devices, err := client.Devices(ctx)
-		return toolJSON(devices), err
+		return toolJSON(agentDeviceList(devices)), err
 	case "device_exec":
 		id, err := requiredString(call.Arguments, "device_id")
 		if err != nil {
@@ -452,6 +452,34 @@ func stringSlice(value any) []string {
 func toolJSON(value any) map[string]any {
 	return map[string]any{"content": []any{map[string]any{"type": "text", "text": mustJSON(value)}}}
 }
+
+func agentDeviceList(devices []protocol.Device) []map[string]any {
+	devices = bridge.SortDevices(devices)
+	out := make([]map[string]any, 0, len(devices))
+	for _, device := range devices {
+		selector := device.Handle
+		if selector == "" {
+			selector = device.Name
+		}
+		out = append(out, map[string]any{
+			"device":             selector,
+			"handle":             device.Handle,
+			"alias":              device.Name,
+			"online":             device.Online,
+			"authorized":         device.Authorized,
+			"desktop_access":     device.DesktopAccess,
+			"os":                 device.OS,
+			"os_version":         device.OSVersion,
+			"architecture":       device.Architecture,
+			"workspace":          device.Workspace,
+			"workspace_mappings": device.Mappings,
+			"capabilities":       device.Capabilities,
+			"last_seen":          device.LastSeen,
+		})
+	}
+	return out
+}
+
 func toolError(err error) map[string]any {
 	return map[string]any{"content": []any{map[string]any{"type": "text", "text": err.Error()}}, "isError": true}
 }

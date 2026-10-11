@@ -31,7 +31,7 @@ go build -o AgentRelay.exe ./cmd/AgentRelay
 go build -ldflags "-H=windowsgui" -o AgentRelay-mcp.exe ./cmd/AgentRelay-mcp
 ```
 
-1. 在主控电脑运行 `AgentRelay setup`，选择 `controller`。保持程序运行，它会启动 Bridge 并等待配对请求。
+1. 在主控电脑运行 `AgentRelay gui`，它会启动 Bridge、开启 LAN 发现并打开设备管理界面；也可以运行 `AgentRelay setup`，选择 `controller`。
 2. 在目标电脑运行 `AgentRelay setup`，选择 `worker`。选择发现到的主控端，指定 Workspace 目录和设备别名。
 3. 核对两台电脑显示的验证数字，然后在主控端终端批准请求。Worker 会保存凭据并自动重连。
 4. 后续启动时，主控运行 `AgentRelay bridge serve`，目标电脑运行 `AgentRelay worker serve`。Windows 下也可使用 `start-bridge.bat` 和 `start-worker.bat`。
@@ -56,14 +56,16 @@ AgentRelay mcp config
 
 ```powershell
 AgentRelay device list
-AgentRelay sync --device <id> --source C:\src\project
-AgentRelay sync --device <id> --source C:\src\project --mode mirror --exclude .cache/
-AgentRelay exec --device <id> --dir C:\src\project "dotnet test"
-AgentRelay task start --device <id> --dir C:\src\project --timeout-ms 60000 "npm run build"
-AgentRelay task get --device <id> --id <task-id>
-AgentRelay task retrieve --device <id> --id <task-id>
-AgentRelay pull --device <id> --out .\results <remote-root>\report.txt
+AgentRelay sync --device build-machine --source C:\src\project
+AgentRelay sync --device build-machine --source C:\src\project --mode mirror --exclude .cache/
+AgentRelay exec --device build-machine --dir C:\src\project "dotnet test"
+AgentRelay task start --device build-machine --dir C:\src\project --timeout-ms 60000 "npm run build"
+AgentRelay task get --device build-machine --id <task-id>
+AgentRelay task retrieve --device build-machine --id <task-id>
+AgentRelay pull --device build-machine --out .\results <remote-root>\report.txt
 ```
+
+`device_list` 返回配对时生成且持久化的短句柄（如 `dev-a1b2c3d4`）、别名、在线状态和能力，不返回设备专有 ID。所有 Agent/CLI 操作的 `device_id` 参数仍然必填，但可以填写短句柄或别名；断线、重连、增删设备都不会改变短句柄。
 
 需要长期运行的 Shell 进程时使用会话：
 
@@ -79,10 +81,10 @@ AgentRelay session close --device <id> --id <session-id>
 无需重新配对即可管理授权：
 
 ```powershell
-AgentRelay device rename --device <id> --name build-machine
-AgentRelay device revoke --device <id>
-AgentRelay device authorize --device <id>
-AgentRelay device remove --device <id>
+AgentRelay device rename --device dev-a1b2c3d4 --name build-machine
+AgentRelay device revoke --device build-machine
+AgentRelay device authorize --device build-machine
+AgentRelay device remove --device build-machine
 ```
 
 ## 桌面能力

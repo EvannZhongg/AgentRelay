@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,19 @@ import (
 	"AgentRelay/internal/bridge"
 	"AgentRelay/internal/protocol"
 )
+
+func publicDevices(devices []protocol.Device) []map[string]any {
+	devices = bridge.SortDevices(devices)
+	out := make([]map[string]any, 0, len(devices))
+	for _, d := range devices {
+		selector := d.Handle
+		if selector == "" {
+			selector = d.Name
+		}
+		out = append(out, map[string]any{"device": selector, "handle": d.Handle, "alias": d.Name, "online": d.Online, "authorized": d.Authorized, "desktop_access": d.DesktopAccess, "os": d.OS, "architecture": d.Architecture, "workspace": d.Workspace, "workspace_mappings": d.Mappings, "capabilities": d.Capabilities, "last_seen": d.LastSeen})
+	}
+	return out
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -30,6 +44,8 @@ func main() {
 		err = workerCommand(os.Args[2:])
 	case "bridge":
 		err = bridgeCommand(os.Args[2:])
+	case "gui":
+		err = guiCommand(os.Args[2:])
 	case "device":
 		err = deviceCommand(os.Args[2:])
 	case "desktop":
@@ -78,7 +94,7 @@ func deviceCommand(args []string) error {
 		if err != nil {
 			return err
 		}
-		return printJSON(out)
+		return printJSON(publicDevices(out))
 	case "rename", "authorize", "revoke", "remove":
 		f := flag.NewFlagSet("device", flag.ContinueOnError)
 		base := f.String("bridge", bridge.DefaultURL, "bridge URL")
@@ -92,7 +108,7 @@ func deviceCommand(args []string) error {
 		}
 		c := bridge.NewClient(*base)
 		if args[0] == "remove" {
-			return c.Do(context.Background(), "DELETE", "/v1/devices/"+*id, nil, nil)
+			return c.Do(context.Background(), "DELETE", "/v1/devices/"+url.PathEscape(*id), nil, nil)
 		}
 		update := bridge.DeviceUpdate{}
 		if args[0] == "rename" {
@@ -243,5 +259,5 @@ func printJSON(v any) error {
 	return err
 }
 func usage() {
-	fmt.Println("AgentRelay\n\nUsage:\n  AgentRelay setup\n  AgentRelay bridge serve\n  AgentRelay worker setup|serve\n  AgentRelay device list|rename|authorize|revoke|remove\n  AgentRelay exec --device <id> [--dir <local-project-or-remote-path>] <command>\n  AgentRelay task start|list|get|retrieve|cancel --device <id> [--id <task-id>]\n  AgentRelay sync --device <id> --source <dir> [--mode update|mirror] [--dry-run]\n  AgentRelay pull --device <id> [--out <local-dir>] <remote-path>...\n  AgentRelay session create|list|get|send|close --device <id> [--id <session-id>]\n  AgentRelay desktop info|capture|input --device <id> [--json <object>]\n  AgentRelay mcp config")
+	fmt.Println("AgentRelay\n\nUsage:\n  AgentRelay setup\n  AgentRelay bridge serve\n  AgentRelay gui\n  AgentRelay worker setup|serve\n  AgentRelay device list|rename|authorize|revoke|remove\n  AgentRelay exec --device <alias|handle> [--dir <local-project-or-remote-path>] <command>\n  AgentRelay task start|list|get|retrieve|cancel --device <alias|handle> [--id <task-id>]\n  AgentRelay sync --device <alias|handle> --source <dir> [--mode update|mirror] [--dry-run]\n  AgentRelay pull --device <alias|handle> [--out <local-dir>] <remote-path>...\n  AgentRelay session create|list|get|send|close --device <alias|handle> [--id <session-id>]\n  AgentRelay desktop info|capture|input --device <alias|handle> [--json <object>]\n  AgentRelay mcp config")
 }

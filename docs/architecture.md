@@ -8,7 +8,7 @@ AgentRelay is an infrastructure layer for coding agents. It does not run a model
 | --- | --- |
 | Bridge | Pairing, device records, authorization, workspace mappings, request routing and local HTTPS API |
 | Worker | Outbound authenticated connection, native shell execution, file access, tasks, sessions and optional desktop operations |
-| CLI | Human-facing controller commands for pairing, device management and remote operations |
+| CLI / GUI | Human-facing controller commands and the embedded cross-platform browser UI for pairing, device management and remote operations |
 | MCP adapter | Stdio JSON-RPC server exposing the remote operations as MCP tools |
 | Discovery | LAN advertisement of the controller URL and certificate fingerprint used during pairing |
 
@@ -23,7 +23,7 @@ The normal request path is `MCP/CLI -> Bridge HTTPS -> authenticated WSS -> Work
 
 Pairing requests expire after five minutes. A manually entered URL without a trusted discovery fingerprint is rejected. Revoking a device is persisted before its active connection is closed; removal deletes the device record and invalidates its credentials.
 
-The controller management API is loopback-only. Remote computers can pair and establish their authenticated Worker connection, but cannot call controller device-management endpoints directly.
+The controller management API is loopback-only. Remote computers can pair and establish their authenticated Worker connection, but cannot call controller device-management endpoints directly. `AgentRelay gui` serves the embedded UI from the same Bridge origin, so it uses the same registry and API as the CLI and does not maintain a second device database. Each approved pairing receives a persistent short handle; agent-facing selectors use that handle or the managed alias, never a connection-order number.
 
 ## Workspaces And Operations
 
@@ -37,7 +37,7 @@ Each task and session store retains at most 128 records. Finished records expire
 
 ## Persistence
 
-State is stored under the current user's `AgentRelay` configuration directory (`%APPDATA%\AgentRelay` on Windows). Set `AGENTRELAY_HOME` to isolate a complete CLI/MCP/Bridge installation. The Bridge persists its TLS identity, device IDs, credential hashes, aliases, authorization, workspace roots and project mappings. Controller-side file hashes are cached there by source path. The Worker persists pairing credentials and its workspace; managed sync manifests live in the workspace's reserved `.agentrelay` directory. Credentials are not returned in device listings.
+State is stored under the current user's `AgentRelay` configuration directory (`%APPDATA%\AgentRelay` on Windows). Set `AGENTRELAY_HOME` to isolate a complete CLI/MCP/Bridge installation. The Bridge persists its TLS identity, device IDs, credential hashes, aliases, authorization, desktop control permission, workspace roots and project mappings. Controller-side file hashes are cached there by source path. The Worker persists pairing credentials and its workspace; managed sync manifests live in the workspace's reserved `.agentrelay` directory. Credentials and private device IDs are not returned in agent-facing device listings.
 
 After a Bridge restart, saved devices initially appear offline. Workers reconnect with exponential backoff (up to 30 seconds) and refresh capabilities without replacing aliases or mappings. If the saved Bridge address changes, run `AgentRelay worker setup` to pair again.
 
@@ -47,6 +47,7 @@ The Bridge exposes health and pairing endpoints to the network as needed for set
 
 - Pairing and connection: `GET /v1/health`, `POST /v1/pair`, `GET /v1/pair/{request-id}`, `GET /v1/connect`.
 - Pairing approval and devices: `/v1/pair-requests`, `/v1/devices`.
+- Management UI: `GET /ui` (served by the same Bridge registry and origin).
 - Operations: `/v1/devices/{id}/exec`, `/files/sync/start`, `/files/sync/{session}/{manifest,plan,file,commit}`, `/files/read`, `/tasks`, `/sessions` and their sub-resources.
 - Desktop: `GET /v1/devices/{id}/desktop`, `POST /v1/devices/{id}/desktop/capture`, `POST /v1/devices/{id}/desktop/input`.
 
