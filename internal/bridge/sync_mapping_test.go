@@ -1,7 +1,10 @@
 package bridge
 
 import (
+	"bytes"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,7 +16,7 @@ func TestSyncMappingIsBoundToStartedSession(t *testing.T) {
 	deviceID := "device-1"
 	server := &Server{
 		cfg:          Config{StatePath: filepath.Join(t.TempDir(), "bridge.json")},
-		store:        registry{Devices: map[string]record{deviceID: {Device: protocol.Device{ID: deviceID, Mappings: map[string]string{}}}}},
+		store:        registry{Devices: map[string]record{deviceID: {Device: protocol.Device{ID: deviceID, Authorized: true, Mappings: map[string]string{}}}}},
 		syncMappings: map[syncMappingKey]syncMapping{},
 	}
 	source := t.TempDir()
@@ -31,17 +34,50 @@ func TestSyncMappingIsBoundToStartedSession(t *testing.T) {
 
 	mapping.expiresAt = time.Now().Add(time.Minute)
 	server.rememberSyncMapping(deviceID, "sync-1", mapping)
-	if err := server.persistSyncMapping(deviceID, "wrong-session"); err == nil {
-		t.Fatal("unregistered sync session was accepted")
+	if _, exists := server.lookupSyncMapping(deviceID, "wrong-session"); exists {
+		t.Fatal("unregistered sync session was found")
 	}
-	if err := server.persistSyncMapping(deviceID, "sync-1"); err != nil {
+	bound, exists := server.lookupSyncMapping(deviceID, "sync-1")
+	if !exists {
+		t.Fatal("registered sync session was not found")
+	}
+	if err := server.persistSyncMapping(deviceID, bound); err != nil {
 		t.Fatal(err)
 	}
 	if got := server.store.Devices[deviceID].Device.Mappings[source]; got != "expected" {
 		t.Fatalf("saved mapping = %q", got)
 	}
-	if len(server.syncMappings) != 0 {
-		t.Fatalf("completed mapping was retained: %+v", server.syncMappings)
+	if len(server.syncMappings) != 1 {
+		t.Fatalf("pending mapping was removed before worker commit: %+v", server.syncMappings)
+	}
+	server.forgetSyncMapping(deviceID, "sync-1")
+	if _, _, ok := parseSyncOperation("/v1/files/sync/start"); ok {
+		t.Fatal("sync start was parsed as a session operation")
+	}
+
+	mapping.expiresAt = time.Now().Add(time.Minute)
+	server.rememberSyncMapping(deviceID, "sync-2", mapping)
+	recorder := httptest.NewRecorder()
+	updateRequest := httptest.NewRequest(http.MethodPatch, "/v1/devices/"+deviceID, bytes.NewBufferString(`{"authorized":false}`))
+	server.updateDevice(recorder, updateRequest, deviceID)
+	if recorder.Code != http.StatusOK || len(server.syncMappings) != 0 {
+		t.Fatalf("revoke status = %d, mappings = %+v", recorder.Code, server.syncMappings)
+	}
+}
+
+func TestSyncMappingMaintenanceRemovesExpiredEntries(t *testing.T) {
+	server := &Server{syncMappings: map[syncMappingKey]syncMapping{
+		{deviceID: "old", syncID: "old"}:       {expiresAt: time.Now().Add(-time.Minute)},
+		{deviceID: "active", syncID: "active"}: {expiresAt: time.Now().Add(time.Minute)},
+	}}
+	server.refreshSyncMapping("active", "active")
+	if len(server.syncMappings) != 1 {
+		t.Fatalf("refresh did not clean expired mappings: %+v", server.syncMappings)
+	}
+	server.syncMappings[syncMappingKey{deviceID: "old", syncID: "old"}] = syncMapping{expiresAt: time.Now().Add(-time.Minute)}
+	server.forgetSyncMapping("missing", "missing")
+	if len(server.syncMappings) != 1 {
+		t.Fatalf("forget did not clean expired mappings: %+v", server.syncMappings)
 	}
 }
 

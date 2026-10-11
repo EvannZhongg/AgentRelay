@@ -439,6 +439,19 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 	syncID, syncOperation, isSyncSession := parseSyncOperation(endpoint)
 	isSyncCommit := isSyncSession && syncOperation == "commit" && r.Method == http.MethodPost
 	isSyncAbort := isSyncSession && syncOperation == "" && r.Method == http.MethodDelete
+	var commitMapping syncMapping
+	if isSyncCommit {
+		var exists bool
+		commitMapping, exists = s.lookupSyncMapping(id, syncID)
+		if !exists {
+			writeError(w, http.StatusConflict, errors.New("sync session mapping not found or expired"))
+			return
+		}
+		if err := s.persistSyncMapping(id, commitMapping); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
 	if endpoint == "/v1/exec" || (r.Method == "POST" && (endpoint == "/v1/tasks" || endpoint == "/v1/sessions")) {
 		var fields map[string]json.RawMessage
 		if json.Unmarshal(data, &fields) == nil {
@@ -470,10 +483,7 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 		s.rememberSyncMapping(id, started.ID, pendingMapping)
 	}
 	if isSyncCommit && resp.Status < http.StatusMultipleChoices {
-		if err := s.persistSyncMapping(id, syncID); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
+		s.forgetSyncMapping(id, syncID)
 	}
 	if isSyncAbort && resp.Status < http.StatusMultipleChoices {
 		s.forgetSyncMapping(id, syncID)
@@ -545,12 +555,8 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request, id string)
 		writeError(w, 500, err)
 		return
 	}
-	if r.Method == "DELETE" {
-		for key := range s.syncMappings {
-			if key.deviceID == id {
-				delete(s.syncMappings, key)
-			}
-		}
+	if r.Method == "DELETE" || (update.Authorized != nil && !*update.Authorized) {
+		s.clearDeviceSyncMappingsLocked(id)
 	}
 	peer := s.connections[id]
 	if r.Method == "DELETE" || !rec.Device.Authorized {
@@ -645,6 +651,9 @@ func parseSyncOperation(endpoint string) (string, string, bool) {
 		return "", "", false
 	}
 	parts := strings.Split(strings.Trim(strings.TrimPrefix(endpoint, prefix), "/"), "/")
+	if len(parts) == 1 && parts[0] == "start" {
+		return "", "", false
+	}
 	if len(parts) == 1 && parts[0] != "" {
 		return parts[0], "", true
 	}
@@ -657,23 +666,23 @@ func parseSyncOperation(endpoint string) (string, string, bool) {
 func (s *Server) rememberSyncMapping(deviceID, syncID string, mapping syncMapping) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now()
-	for key, current := range s.syncMappings {
-		if !current.expiresAt.IsZero() && now.After(current.expiresAt) {
-			delete(s.syncMappings, key)
-		}
+	s.cleanupSyncMappingsLocked(time.Now())
+	if s.syncMappings == nil {
+		s.syncMappings = map[syncMappingKey]syncMapping{}
 	}
 	s.syncMappings[syncMappingKey{deviceID: deviceID, syncID: syncID}] = mapping
 }
 
 func (s *Server) forgetSyncMapping(deviceID, syncID string) {
 	s.mu.Lock()
+	s.cleanupSyncMappingsLocked(time.Now())
 	delete(s.syncMappings, syncMappingKey{deviceID: deviceID, syncID: syncID})
 	s.mu.Unlock()
 }
 
 func (s *Server) refreshSyncMapping(deviceID, syncID string) {
 	s.mu.Lock()
+	s.cleanupSyncMappingsLocked(time.Now())
 	key := syncMappingKey{deviceID: deviceID, syncID: syncID}
 	mapping, exists := s.syncMappings[key]
 	if exists {
@@ -683,14 +692,33 @@ func (s *Server) refreshSyncMapping(deviceID, syncID string) {
 	s.mu.Unlock()
 }
 
-func (s *Server) persistSyncMapping(id, syncID string) error {
+func (s *Server) lookupSyncMapping(deviceID, syncID string) (syncMapping, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := syncMappingKey{deviceID: id, syncID: syncID}
-	mapping, exists := s.syncMappings[key]
-	if !exists {
-		return errors.New("sync session mapping not found")
+	s.cleanupSyncMappingsLocked(time.Now())
+	mapping, exists := s.syncMappings[syncMappingKey{deviceID: deviceID, syncID: syncID}]
+	return mapping, exists
+}
+
+func (s *Server) cleanupSyncMappingsLocked(now time.Time) {
+	for key, mapping := range s.syncMappings {
+		if !mapping.expiresAt.IsZero() && now.After(mapping.expiresAt) {
+			delete(s.syncMappings, key)
+		}
 	}
+}
+
+func (s *Server) clearDeviceSyncMappingsLocked(deviceID string) {
+	for key := range s.syncMappings {
+		if key.deviceID == deviceID {
+			delete(s.syncMappings, key)
+		}
+	}
+}
+
+func (s *Server) persistSyncMapping(id string, mapping syncMapping) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	rec, ok := s.store.Devices[id]
 	if !ok {
 		return errors.New("device not found")
@@ -707,7 +735,6 @@ func (s *Server) persistSyncMapping(id, syncID string) error {
 		s.store.Devices[id] = previous
 		return err
 	}
-	delete(s.syncMappings, key)
 	return nil
 }
 func readJSON(r *http.Request, dst any) error {

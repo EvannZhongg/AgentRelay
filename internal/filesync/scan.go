@@ -98,15 +98,15 @@ func Scan(options Options) (ScanResult, error) {
 		}
 		rel = filepath.ToSlash(rel)
 		parts := strings.Split(rel, "/")
+		if entry.Type()&os.ModeSymlink != 0 {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("skipped symbolic link %s", rel))
+			return nil
+		}
 		if hardIgnored(parts) || matcher.Match(parts, entry.IsDir()) {
 			result.Ignored++
 			if entry.IsDir() {
 				return filepath.SkipDir
 			}
-			return nil
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			result.Warnings = append(result.Warnings, fmt.Sprintf("skipped symbolic link %s", rel))
 			return nil
 		}
 		if entry.IsDir() {

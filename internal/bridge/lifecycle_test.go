@@ -45,6 +45,40 @@ func restartBridge(t *testing.T, relay *testutil.Relay) (*bridge.Server, *httpte
 	return b, server, bridge.NewClient(server.URL)
 }
 
+func TestBridgeRestartRejectsCommitBeforeWorkerAppliesIt(t *testing.T) {
+	relay := testutil.New(t, "")
+	ctx := context.Background()
+	devicePath := "/v1/devices/" + relay.Device.ID
+	var started protocol.SyncStartResponse
+	if err := relay.Client.Do(ctx, "POST", devicePath+"/files/sync/start", protocol.SyncStartRequest{
+		SourcePath: t.TempDir(),
+		Root:       "restart-guard",
+		Mode:       protocol.SyncModeUpdate,
+	}, &started); err != nil {
+		t.Fatal(err)
+	}
+	if err := relay.Client.Do(ctx, "POST", devicePath+"/files/sync/"+started.ID+"/manifest", protocol.SyncManifestRequest{Final: true}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := relay.Client.Do(ctx, "POST", devicePath+"/files/sync/"+started.ID+"/plan", struct{}{}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, client := restartBridge(t, relay)
+	peer, err := relay.Worker.Connect(ctx, relay.Credentials)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(peer.Close)
+	commitPath := devicePath + "/files/sync/" + started.ID + "/commit"
+	if err := client.Do(ctx, "POST", commitPath, struct{}{}, nil); err == nil || !strings.Contains(err.Error(), "mapping not found or expired") {
+		t.Fatalf("commit after bridge restart = %v", err)
+	}
+	if err := client.Do(ctx, "DELETE", devicePath+"/files/sync/"+started.ID, nil, nil); err != nil {
+		t.Fatalf("worker session was committed before mapping validation: %v", err)
+	}
+}
+
 func TestBridgeRestartPreservesIdentityMappingsAndWorkerProcesses(t *testing.T) {
 	relay := testutil.New(t, "")
 	ctx := context.Background()

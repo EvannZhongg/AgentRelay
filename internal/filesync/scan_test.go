@@ -76,6 +76,35 @@ func TestScanSkipsSymbolicLinks(t *testing.T) {
 	}
 }
 
+func TestScanWarnsWhenAgentRelayIgnoreIsASymbolicLink(t *testing.T) {
+	t.Setenv("AGENTRELAY_HOME", t.TempDir())
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "ignore-rules")
+	if err := os.WriteFile(target, []byte("*.secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".agentrelayignore\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, ".agentrelayignore")); err != nil {
+		t.Skipf("symbolic links are unavailable: %v", err)
+	}
+	result, err := Scan(Options{SourcePath: root, UseGitIgnore: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, warning := range result.Warnings {
+		if strings.Contains(warning, "skipped symbolic link .agentrelayignore") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("warnings = %v", result.Warnings)
+	}
+}
+
 func TestScanRecoversFromInvalidCache(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("AGENTRELAY_HOME", home)
