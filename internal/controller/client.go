@@ -91,16 +91,12 @@ func (c *Client) CreateDevice(ctx context.Context, req protocol.DeviceCreate) (o
 	err = c.Do(ctx, "POST", "/v1/devices", req, &out)
 	return
 }
-func (c *Client) AddConnection(ctx context.Context, id string, req protocol.ConnectionSpec) (out protocol.Connection, err error) {
-	err = c.Do(ctx, "POST", devicePath(id)+"/connections", req, &out)
+func (c *Client) ReplaceConnection(ctx context.Context, id string, req protocol.ConnectionReplacement) (out protocol.Device, err error) {
+	err = c.Do(ctx, "POST", devicePath(id)+"/connection/replace", req, &out)
 	return
 }
-func (c *Client) TestConnection(ctx context.Context, id, cid string) (out protocol.Connection, err error) {
-	err = c.Do(ctx, "POST", devicePath(id)+"/connections/"+url.PathEscape(cid)+"/test", nil, &out)
-	return
-}
-func (c *Client) AttachPairing(ctx context.Context, pairingID, deviceID string) (out protocol.PairingStatus, err error) {
-	err = c.Do(ctx, "POST", "/v1/pair-requests/"+url.PathEscape(pairingID)+"/approve", map[string]string{"device_id": deviceID}, &out)
+func (c *Client) TestConnection(ctx context.Context, id string) (out protocol.Connection, err error) {
+	err = c.Do(ctx, "POST", devicePath(id)+"/connection/test", nil, &out)
 	return
 }
 func (c *Client) PairRequests(ctx context.Context) (out []protocol.PairingRequest, err error) {
@@ -167,7 +163,7 @@ func (c *Client) CloseSession(ctx context.Context, id, session string) (out prot
 	return
 }
 
-func (c *Client) UpdateConnection(ctx context.Context, id, cid string, req protocol.ConnectionSpec) (out protocol.Connection, err error) {
-	err = c.Do(ctx, "PATCH", devicePath(id)+"/connections/"+url.PathEscape(cid), req, &out)
+func (c *Client) UpdateConnection(ctx context.Context, id string, req protocol.ConnectionSpec) (out protocol.Connection, err error) {
+	err = c.Do(ctx, "PATCH", devicePath(id)+"/connection", req, &out)
 	return
 }

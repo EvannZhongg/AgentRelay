@@ -44,7 +44,7 @@ Tests select native PowerShell/POSIX commands explicitly. Windows and Linux/WSL 
 - Keep transport concerns in `internal/transport`. Worker operations run through the authenticated connection and must not add a Worker listening port.
 - Keep native OS calls behind `internal/desktop.Backend`. Platform code handles OS details; the service owns validation, coordinate conversion and serialization.
 - Keep controller state changes atomic and preserve the existing authorization checks for every device operation.
-- Source authority is per connection: local_sync uses Controller source mappings; remote uses the target repository. Neither requires sync before executing. Never share mappings between connections or use Controller OS rules to parse target absolute paths.
+- Source authority is per connection: local_sync uses Controller source mappings; remote uses the target repository. Neither requires sync before executing. Never share mappings between connections; replacing a device connection discards them. Never use Controller OS rules to parse target absolute paths.
 - Keep device operation routing independent of transport kinds. New adapters implement internal/connection.Adapter and register through Controller Config.Adapters; MCP tools stay unchanged.
 - Keep Controller/SSH/source-scanner packages out of the standalone Worker dependency graph.
 - SSH transport carries opaque bytes; keep native script generation, workspace checks and result framing in internal/backend. Native executor tests must use target-platform commands and require no Python. See [SSH executor verification](ssh.md).
@@ -52,7 +52,7 @@ Tests select native PowerShell/POSIX commands explicitly. Windows and Linux/WSL 
 ## Adding A Remote Operation
 
 1. Define or update the request and response types in `internal/protocol`.
-2. Add a capability interface/implementation and the Worker or SSH executor operation. Advertise only supported capabilities and route through the selected connection's capability set.
+2. Add a capability interface/implementation and the Worker or SSH executor operation. Advertise only supported capabilities and route through the device connection's capability set.
 3. Add the Controller client method and local-only controller endpoint when needed.
 4. Expose the operation in the CLI and/or MCP adapter with matching validation and error behavior.
 5. Add unit and lifecycle coverage for authorization, disconnects, path boundaries and persistence as applicable.

@@ -256,7 +256,23 @@ func (s *Server) Connect(ctx context.Context, credentials protocol.Credentials) 
 		}
 		return nil, err
 	}
-	peer := transport.NewPeer(conn, transport.HTTPHandler(s.Handler()))
+	handler := transport.HTTPHandler(s.Handler())
+	var peer *transport.Peer
+	ready := make(chan struct{})
+	peer = transport.NewPeer(conn, func(ctx context.Context, req transport.Request) transport.Response {
+		<-ready
+		resp := handler(ctx, req)
+		if req.Path == "/v1/activity" && resp.Status == 200 {
+			var activity protocol.Activity
+			_ = json.Unmarshal(resp.Body, &activity)
+			// Include queued handlers after an RPC timeout/cancel. Exclude this
+			// activity request itself so an idle connection can be replaced.
+			activity.Requests = max(activity.Requests, int64(peer.ActiveRequests()-1))
+			resp.Body, _ = json.Marshal(activity)
+		}
+		return resp
+	})
+	close(ready)
 	device := s.Device()
 	device.ID = credentials.DeviceID
 	data, _ := json.Marshal(device)

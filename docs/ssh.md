@@ -18,8 +18,8 @@ This is **no additional language-runtime installation**, rather than a claim tha
 AgentRelay connection add-ssh --name windows-dev --platform windows --workspace C:\src\repo --host 192.168.1.30 --user builder
 AgentRelay connection add-ssh --name mac-dev --platform posix --workspace /Users/builder/repo --host 192.168.1.31 --user builder
 AgentRelay connection add-ssh --name linux-dev --workspace /home/builder/repo --host 192.168.1.32 --user builder
-AgentRelay connection list --device windows-dev
-AgentRelay connection test --device windows-dev --id <connection-id>
+AgentRelay connection show --device windows-dev
+AgentRelay connection test --device windows-dev
 AgentRelay exec --device windows-dev --dir C:\src\repo "Get-ChildItem"
 ```
 

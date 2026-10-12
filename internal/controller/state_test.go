@@ -15,7 +15,7 @@ import (
 
 func TestMissingDeviceHandlesAreRejected(t *testing.T) {
 	filename := filepath.Join(t.TempDir(), "controller.json")
-	initial := registry{Schema: 3, Devices: map[string]record{
+	initial := registry{Schema: 4, Devices: map[string]record{
 		"private-id": {Device: protocol.Device{ID: "private-id", Name: "laptop", Workspace: t.TempDir()}},
 	}}
 	data, err := json.Marshal(initial)

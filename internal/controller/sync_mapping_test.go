@@ -15,7 +15,7 @@ func TestSyncMappingIsBoundToStartedSession(t *testing.T) {
 	deviceID := "device-1"
 	server := &Server{
 		cfg:          Config{StatePath: filepath.Join(t.TempDir(), "controller.json")},
-		store:        registry{Connections: map[string]connectionRecord{"connection-1": {Connection: protocol.Connection{ID: "connection-1", DeviceID: deviceID, Workspace: protocol.WorkspacePolicy{Mode: protocol.WorkspaceLocalSync, Root: t.TempDir()}}}}, Devices: map[string]record{deviceID: {Device: protocol.Device{ID: deviceID, Authorized: true, ActiveConnection: "connection-1", Mappings: map[string]string{}}}}},
+		store:        registry{Connections: map[string]connectionRecord{"connection-1": {Connection: protocol.Connection{ID: "connection-1", DeviceID: deviceID, Workspace: protocol.WorkspacePolicy{Mode: protocol.WorkspaceLocalSync, Root: t.TempDir()}}}}, Devices: map[string]record{deviceID: {Device: protocol.Device{ID: deviceID, Authorized: true, ConnectionID: "connection-1", Mappings: map[string]string{}}}}},
 		syncMappings: map[syncMappingKey]syncMapping{},
 	}
 	source := t.TempDir()

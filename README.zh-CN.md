@@ -42,9 +42,10 @@ go build -o AgentRelay-worker.exe ./cmd/AgentRelay-worker
 
 ## 接入 Agent
 
-无需部署 Worker 时，在 GUI 中选择“添加 SSH 连接”，填写配置后点击“测试”。SSH 首版支持命令执行和工作区文件读取；原生 Worker 提供增量同步、任务、持久会话和可选桌面能力。桌面操作取决于系统、交互会话及权限，不作为跨系统稳定能力保证。
+无需部署 Worker 时，在 GUI 中选择“新增设备 / 更换为 SSH”，填写配置后点击“测试”。SSH 首版支持命令执行和工作区文件读取；原生 Worker 提供增量同步、任务、持久会话和可选桌面能力。桌面操作取决于系统、交互会话及权限，不作为跨系统稳定能力保证。
 
-同一设备可保留 SSH 与 Worker 连接，通过“设为执行连接”明确选择。每条连接独立配置工作区根目录、模式和映射，不要求根目录一致。批准 Worker 配对时可“附加到”已有设备，Agent 始终看到同一个稳定句柄。详见[设备、连接和能力](docs/connections.md)。主控状态和 Worker 凭据使用 schema 3，旧数据直接拒绝；请使用新的 `AGENTRELAY_HOME` 重新配置和配对，不保留旧命令或参数的兼容别名。
+每台设备只绑定一种连接方式。显式“更换连接方式”保留别名、Handle 和设备 ID，替换连接配置并废弃旧凭据与映射；只有执行请求、后台任务、会话和同步均已结束时才能更换。Worker 离线时需重连以确认活动状态。Agent 只看到设备和操作能力，SSH 的 `desktop` 始终为 `false`，不暴露连接配置或管理工具。详见[设备、连接和能力](docs/connections.md)。主控状态改用 schema 4，Worker 凭据仍为 schema 3（格式未变）；旧主控数据直接拒绝，请使用新的 `AGENTRELAY_HOME` 重新配置和配对，无迁移或兼容层。
+
 
 在主控电脑以运行 Controller 的同一用户执行：
 
@@ -73,7 +74,7 @@ AgentRelay pull --device build-machine --out .\results <remote-root>\report.txt
 
 `device_list` 返回配对时生成且持久化的短句柄（如 `dev-a1b2c3d4`）、别名、在线状态和能力，不返回设备专有 ID。所有 Agent/CLI 操作的 `device_id` 参数仍然必填，但可以填写短句柄或别名；断线、重连、增删设备都不会改变短句柄。
 
-选中连接会暴露 `workspace_mode`：Worker 默认 `local_sync`，主控本地源码是同步源；SSH 默认 `remote`，远端仓库是源。两种模式均可不经同步直接执行。远端模式可直接运行 `AgentRelay exec --device linux-dev --dir /home/dev/repo "pwd"`，并禁用同步以保护远端源码。`--dir-kind local|remote|auto`（MCP 的 `working_dir_kind`）明确路径属于主控还是被控端。GUI 中的模式和映射均按连接配置。
+设备会暴露 `workspace_mode`：Worker 默认 `local_sync`，主控本地源码是同步源；SSH 默认 `remote`，远端仓库是源。两种模式均可不经同步直接执行。远端模式可直接运行 `AgentRelay exec --device linux-dev --dir /home/dev/repo "pwd"`，并禁用同步以保护远端源码。`--dir-kind local|remote|auto`（MCP 的 `working_dir_kind`）明确路径属于主控还是被控端。GUI 中的模式和映射均按连接配置。
 
 需要长期运行的 Shell 进程时使用会话：
 
@@ -84,7 +85,7 @@ AgentRelay session get --device <id> --id <session-id>
 AgentRelay session close --device <id> --id <session-id>
 ```
 
-远端路径按选中连接的授权根目录检查，根目录内的远端绝对路径会转换为相对路径。`local_sync` 模式下，`sync` 通过 SHA-256 manifest 比较差异并分块上传变化文件，目录和单文件不受 32 MiB RPC 载荷上限约束。默认应用嵌套的 `.gitignore` 和根目录 `.agentrelayignore`；可重复使用 `--exclude` 添加规则，或用 `--no-gitignore` 关闭 `.gitignore`。`--mode update` 保留远端额外文件，`--mode mirror` 只删除此前由同步管理、但本地已不存在的文件；`--dry-run` 只返回计划。同步成功后，在该连接上持久化本地项目到远端目录的映射，后续命令可以使用同一个本地目录。任务和会话保存在内存中，Worker 进程重启后不会恢复。
+远端路径按设备连接的授权根目录检查，根目录内的远端绝对路径会转换为相对路径。`local_sync` 模式下，`sync` 通过 SHA-256 manifest 比较差异并分块上传变化文件，目录和单文件不受 32 MiB RPC 载荷上限约束。默认应用嵌套的 `.gitignore` 和根目录 `.agentrelayignore`；可重复使用 `--exclude` 添加规则，或用 `--no-gitignore` 关闭 `.gitignore`。`--mode update` 保留远端额外文件，`--mode mirror` 只删除此前由同步管理、但本地已不存在的文件；`--dry-run` 只返回计划。同步成功后，在该连接上持久化本地项目到远端目录的映射，后续命令可以使用同一个本地目录。任务和会话保存在内存中，Worker 进程重启后不会恢复。
 
 无需重新配对即可管理授权：
 

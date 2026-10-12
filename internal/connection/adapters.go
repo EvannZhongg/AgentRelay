@@ -3,6 +3,8 @@
 package connection
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 
 	"AgentRelay/internal/backend"
@@ -15,6 +17,7 @@ type Adapter interface {
 	Capabilities() protocol.Capabilities
 	Probe() transport.Request
 	Bind(protocol.Connection, backend.Call) (backend.Call, error)
+	CheckIdle(context.Context, protocol.Connection, backend.Call) error
 }
 
 // Registry is configured once when constructing the Controller. Additional
@@ -24,6 +27,9 @@ type Registry map[string]Adapter
 func Defaults() Registry { return Registry{"ssh": SSH{}, "worker": Worker{}} }
 
 type SSH struct{}
+
+// SSH executes synchronous calls only; the Controller guards their lifetime.
+func (SSH) CheckIdle(context.Context, protocol.Connection, backend.Call) error { return nil }
 
 func (SSH) Probe() transport.Request { return transport.Request{Method: "GET", Path: "/probe"} }
 func (SSH) Validate(c protocol.ConnectionSpec) error {
@@ -47,6 +53,27 @@ func (SSH) Bind(c protocol.Connection, _ backend.Call) (backend.Call, error) {
 }
 
 type Worker struct{}
+
+func (Worker) CheckIdle(ctx context.Context, c protocol.Connection, live backend.Call) error {
+	if !c.Online || live == nil {
+		return errors.New("reconnect Worker before changing its connection; activity cannot be verified while offline")
+	}
+	resp, err := live(ctx, transport.Request{Method: "GET", Path: "/v1/activity"})
+	if err != nil {
+		return err
+	}
+	if resp.Status != 200 {
+		return errors.New("could not verify Worker activity")
+	}
+	var activity protocol.Activity
+	if err := json.Unmarshal(resp.Body, &activity); err != nil {
+		return err
+	}
+	if activity.Busy() {
+		return errors.New("finish active requests, tasks, sessions and syncs before changing connection")
+	}
+	return nil
+}
 
 func (Worker) Probe() transport.Request { return transport.Request{Method: "GET", Path: "/v1/device"} }
 func (Worker) Validate(c protocol.ConnectionSpec) error {

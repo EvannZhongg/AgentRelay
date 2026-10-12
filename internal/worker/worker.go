@@ -31,6 +31,7 @@ type Config struct {
 }
 
 type Server struct {
+	requests  atomic.Int64
 	desktop   *desktop.Service
 	cfg       Config
 	startedAt time.Time
@@ -118,6 +119,7 @@ func (s *Server) Close() {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/activity", s.activity)
 	mux.HandleFunc("/v1/health", s.health)
 	mux.HandleFunc("/v1/device", s.device)
 	mux.HandleFunc("/v1/desktop", s.desktopInfo)
@@ -131,7 +133,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/tasks/", s.taskByID)
 	mux.HandleFunc("/v1/sessions", s.sessionsRoot)
 	mux.HandleFunc("/v1/sessions/", s.sessionByID)
-	return withJSONHeaders(mux)
+	return withJSONHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/activity" {
+			s.requests.Add(1)
+			defer s.requests.Add(-1)
+		}
+		mux.ServeHTTP(w, r)
+	}))
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

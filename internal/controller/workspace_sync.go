@@ -30,7 +30,7 @@ func (s *Server) prepareSyncStart(id string, data []byte) ([]byte, syncMapping, 
 	if !ok {
 		return nil, syncMapping{}, errors.New("device not found")
 	}
-	policy := s.store.Connections[rec.Device.ActiveConnection].Connection.Workspace
+	policy := s.store.Connections[rec.Device.ConnectionID].Connection.Workspace
 	if policy.Mode != protocol.WorkspaceLocalSync {
 		return nil, syncMapping{}, errors.New("sync requires local_sync workspace mode")
 	}
@@ -45,7 +45,7 @@ func (s *Server) prepareSyncStart(id string, data []byte) ([]byte, syncMapping, 
 	if !workspace.Relative(req.Root) {
 		return nil, syncMapping{}, errors.New("remote root must be workspace-relative")
 	}
-	mapping := syncMapping{connectionID: rec.Device.ActiveConnection, sourcePath: local, root: req.Root}
+	mapping := syncMapping{connectionID: rec.Device.ConnectionID, sourcePath: local, root: req.Root}
 	req.SourcePath = ""
 	forwarded, err := json.Marshal(req)
 	return forwarded, mapping, err
@@ -129,11 +129,11 @@ func (s *Server) persistSyncMapping(id string, mapping syncMapping) error {
 	if !ok {
 		return errors.New("device not found")
 	}
-	if !rec.Device.Authorized || rec.Device.ActiveConnection != mapping.connectionID {
+	if !rec.Device.Authorized || rec.Device.ConnectionID != mapping.connectionID {
 		return errors.New("connection authorization or selection changed during sync")
 	}
 	previous := rec
-	cid := rec.Device.ActiveConnection
+	cid := rec.Device.ConnectionID
 	previousConnection := s.store.Connections[cid]
 	connection := previousConnection
 	mappings := make(map[string]string, len(connection.Connection.Workspace.Mappings)+1)

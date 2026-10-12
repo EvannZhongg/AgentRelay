@@ -14,14 +14,27 @@ import (
 )
 
 func TestAgentDeviceListingOmitsConnectionConfiguration(t *testing.T) {
-	d := protocol.Device{ID: "private-device", Handle: "dev-example", Name: "computer", ActiveConnection: "private-connection", Capabilities: protocol.Capabilities{Exec: true}, Connections: []protocol.Connection{{ID: "private-connection", Kind: "ssh", SSH: &protocol.SSHConfig{Host: "private-host", User: "private-user", IdentityFile: "private-key-file"}}}}
+	d := protocol.Device{ID: "private-device", Handle: "dev-example", Name: "computer", ConnectionID: "private-connection", Capabilities: protocol.Capabilities{Exec: true}, Connection: &protocol.Connection{ID: "private-connection", Kind: "ssh", SSH: &protocol.SSHConfig{Host: "private-host", User: "private-user", IdentityFile: "private-key-file"}}}
 	data, err := json.Marshal(agentDeviceList([]protocol.Device{d}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, private := range []string{"private-device", "private-connection", "private-host", "private-user", "private-key-file", "active_connection", "connections"} {
+	for _, private := range []string{"private-device", "private-connection", "private-host", "private-user", "private-key-file", "connection_id", "connection", "ssh", "worker"} {
 		if strings.Contains(string(data), private) {
 			t.Fatalf("agent learned connection configuration: %s", data)
+		}
+	}
+	if !strings.Contains(string(data), `"desktop":false`) {
+		t.Fatal("unsupported Desktop must be explicit")
+	}
+	d.Capabilities.Desktop = &protocol.DesktopCapability{Supported: true, Backend: "private-backend"}
+	data, _ = json.Marshal(agentDeviceList([]protocol.Device{d}))
+	if !strings.Contains(string(data), `"desktop":true`) || strings.Contains(string(data), "private-backend") {
+		t.Fatal("Desktop must expose availability, not adapter details")
+	}
+	for _, definition := range toolDefinitions() {
+		if strings.Contains(definition["name"].(string), "connection") {
+			t.Fatal("connection management exposed as an Agent tool")
 		}
 	}
 	if !strings.Contains(string(data), "dev-example") || !strings.Contains(string(data), "capabilities") {
@@ -32,10 +45,10 @@ func TestAgentDeviceListingOmitsConnectionConfiguration(t *testing.T) {
 func TestMCPExecutesRemoteRepositoryWithoutSync(t *testing.T) {
 	relay := testutil.New(t, "")
 	ctx := context.Background()
-	c := relay.Device.Connections[0]
+	c := *relay.Device.Connection
 	policy := c.Workspace
 	policy.Mode = protocol.WorkspaceRemote
-	if _, err := relay.Client.UpdateConnection(ctx, relay.Device.Handle, c.ID, protocol.ConnectionSpec{Kind: c.Kind, Workspace: policy}); err != nil {
+	if _, err := relay.Client.UpdateConnection(ctx, relay.Device.Handle, protocol.ConnectionSpec{Kind: c.Kind, Workspace: policy}); err != nil {
 		t.Fatal(err)
 	}
 	dir := filepath.Join(policy.Root, "existing-repo")

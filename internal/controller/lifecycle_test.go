@@ -183,8 +183,8 @@ func TestControllerRestartPreservesIdentityMappingsAndWorkerProcesses(t *testing
 	if _, err = client.GetTask(ctx, d.ID, task.ID); err == nil {
 		t.Fatal("fresh Worker retained an old process record")
 	}
-	var current protocol.Device
-	if err = client.Do(ctx, "GET", "/v1/devices/"+d.ID+"/device", nil, &current); err != nil || current.ID != d.ID {
+	var current map[string]any
+	if err = client.Do(ctx, "GET", "/v1/devices/"+d.ID+"/device", nil, &current); err != nil || current["handle"] != d.Handle {
 		t.Fatalf("Worker restart identity: %+v, %v", current, err)
 	}
 	devices, err = client.Devices(ctx)

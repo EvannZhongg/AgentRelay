@@ -57,7 +57,7 @@ func TestSSHIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = c.TestConnection(ctx, d.ID, d.ActiveConnection); err != nil {
+	if _, err = c.TestConnection(ctx, d.ID); err != nil {
 		t.Fatal(err)
 	}
 	result, err := c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: native("[Console]::Write($env:RELAY_TEST); [Console]::Error.Write('error'); exit 7", "printf '%s' \"$RELAY_TEST\"; printf error >&2; exit 7"), Env: map[string]string{"RELAY_TEST": "SSH 'quoted' value"}})
@@ -133,7 +133,7 @@ func TestSSHIntegration(t *testing.T) {
 	if _, err := c.UpdateDevice(ctx, d.Handle, controller.DeviceUpdate{Authorized: &yes}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.TestConnection(ctx, d.ID, d.ActiveConnection); err != nil {
+	if _, err := c.TestConnection(ctx, d.ID); err != nil {
 		t.Fatal(err)
 	}
 	result, err = c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: native("if(Get-Process -Id ([int][IO.File]::ReadAllText('cancel.pid')) -ErrorAction SilentlyContinue){exit 0}else{exit 1}", "ps -p \"$(cat cancel.pid)\" -o stat= | grep -qv Z")})

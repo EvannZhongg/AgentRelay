@@ -32,6 +32,11 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 	rec := old
+	if s.changing[id] {
+		s.mu.Unlock()
+		writeError(w, 409, errors.New("device connection is being changed"))
+		return
+	}
 	oldConnections := make(map[string]connectionRecord)
 	for cid, c := range s.store.Connections {
 		if c.Connection.DeviceID == id {
@@ -44,21 +49,6 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request, id string)
 			delete(s.store.Connections, cid)
 		}
 	} else {
-		if update.ActiveConnection != nil {
-			c, ok := s.store.Connections[*update.ActiveConnection]
-			if !ok || c.Connection.DeviceID != id {
-				s.mu.Unlock()
-				writeError(w, 400, errors.New("connection does not belong to this device"))
-				return
-			}
-			if *update.ActiveConnection != rec.Device.ActiveConnection && s.hasSyncMappingsLocked(id) {
-				s.mu.Unlock()
-				writeError(w, 409, errors.New("abort or finish active syncs before switching connections"))
-				return
-			}
-			rec.Device.ActiveConnection = *update.ActiveConnection
-
-		}
 		if update.Name != nil {
 			if !s.aliasAvailableLocked(*update.Name, id) {
 				s.mu.Unlock()

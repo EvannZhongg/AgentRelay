@@ -152,7 +152,7 @@ func toolDefinitions() []map[string]any {
 		return map[string]any{"type": "string", "description": description}
 	}
 	return append([]map[string]any{
-		{"name": "device_list", "description": "List logical devices using persistent handles and aliases, authorization, selected workspace_mode (local_sync or remote), workspace mappings, capabilities and availability. Each device appears once. Check advertised capabilities before requesting an operation. Private IDs and connection configuration are omitted; offline entries remain visible.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
+		{"name": "device_list", "description": "List logical devices using persistent handles and aliases, authorization, workspace_mode (local_sync or remote), workspace mappings, capabilities and availability. Each device appears once. Check advertised capabilities before requesting an operation. Private IDs and connection configuration are omitted; offline entries remain visible.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
 		{"name": "device_exec", "description": "Execute a command on a device selected by a persistent handle or alias and return stdout, stderr and exit status.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false,
 			"properties": map[string]any{
@@ -454,31 +454,7 @@ func toolJSON(value any) map[string]any {
 }
 
 func agentDeviceList(devices []protocol.Device) []map[string]any {
-	devices = controller.SortDevices(devices)
-	out := make([]map[string]any, 0, len(devices))
-	for _, device := range devices {
-		selector := device.Handle
-		if selector == "" {
-			selector = device.Name
-		}
-		out = append(out, map[string]any{
-			"device":             selector,
-			"handle":             device.Handle,
-			"alias":              device.Name,
-			"online":             device.Online,
-			"authorized":         device.Authorized,
-			"desktop_access":     device.DesktopAccess,
-			"os":                 device.OS,
-			"os_version":         device.OSVersion,
-			"architecture":       device.Architecture,
-			"workspace":          device.Workspace,
-			"workspace_mode":     device.WorkspaceMode,
-			"workspace_mappings": device.Mappings,
-			"capabilities":       device.Capabilities,
-			"last_seen":          device.LastSeen,
-		})
-	}
-	return out
+	return controller.AgentDevices(devices)
 }
 
 func toolError(err error) map[string]any {

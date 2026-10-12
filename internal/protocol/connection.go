@@ -38,7 +38,7 @@ type DeviceCreate struct {
 	Connection ConnectionSpec `json:"connection"`
 }
 
-// ConnectionSpec configures a transport and its independent workspace policy.
+// ConnectionSpec configures a device's sole transport and workspace policy.
 type ConnectionSpec struct {
 	Kind      string          `json:"kind"`
 	SSH       *SSHConfig      `json:"ssh,omitempty"`
@@ -55,4 +55,23 @@ type WorkspacePolicy struct {
 	Mode     string            `json:"mode"`
 	Root     string            `json:"root"`
 	Mappings map[string]string `json:"mappings,omitempty"`
+}
+
+// ConnectionReplacement is an explicit user action. Worker requires a pending
+// pairing request; other adapters use a fresh connection specification.
+type ConnectionReplacement struct {
+	Connection *ConnectionSpec `json:"connection,omitempty"`
+	PairingID  string          `json:"pairing_id,omitempty"`
+}
+
+// Activity is private transport state used to guard connection replacement.
+type Activity struct {
+	Requests int64 `json:"requests"`
+	Tasks    int   `json:"tasks"`
+	Sessions int   `json:"sessions"`
+	Syncs    int   `json:"syncs"`
+}
+
+func (a Activity) Busy() bool {
+	return a.Requests != 0 || a.Tasks != 0 || a.Sessions != 0 || a.Syncs != 0
 }

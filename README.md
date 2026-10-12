@@ -2,11 +2,11 @@ English | [简体中文](README.zh-CN.md)
 
 # AgentRelay
 
-AgentRelay gives a coding agent a secure, controlled connection to native execution environments on other computers. The agent stays on the controller and sees devices with explicit capabilities. Each device can select SSH or a native Worker as its execution connection.
+AgentRelay gives a coding agent a secure, controlled connection to native execution environments on other computers. The agent stays on the controller and sees devices with explicit capabilities. Each device binds one connection, using either SSH or a native Worker.
 
 ```text
 Coding agent -- MCP stdio / CLI --> Controller (HTTPS)
-                                      | selected device connection
+                                      | single device connection
                         +-------------+-------------+
                         |                           |
                   SSH + native shell         Native Worker (WSS)
@@ -42,7 +42,8 @@ Pairing requests expire after five minutes. Devices/credentials are created only
 
 ## Connect Your Agent
 
-For deployment without a Worker, use **添加 SSH 连接** in the GUI, then **测试**. SSH provides execution and file reads, defaulting to the remote repository as source. A device may have both SSH and Worker connections with independent roots/policies and appears once to the agent. See [connections](docs/connections.md). Controller state and Worker credentials require schema 3; use fresh state and configure/pair again. Old data, commands and flags have no compatibility aliases.
+For deployment without a Worker, use **新增设备 / 更换为 SSH** in the GUI, then **测试**. SSH provides execution and file reads, defaulting to the remote repository as source. A device has exactly one connection. Explicit replacement preserves its alias and handle, replaces configuration and discards old credentials/mappings; execution, tasks, sessions and syncs must be idle. Worker must be online to verify activity. Agents see operational capabilities, including `desktop: false` for SSH, with no connection configuration or management tools. See [connections](docs/connections.md). Controller state requires schema 4; Worker credentials retain schema 3. Older Controller state is rejected without compatibility layers or migration; configure/pair using fresh state.
+
 
 Run this on the controller, as the same user that runs the Controller:
 
@@ -71,7 +72,7 @@ AgentRelay pull --device build-machine --out .\results <remote-root>\report.txt
 
 `device_list` exposes a persistent short handle generated at pairing time (for example `dev-a1b2c3d4`), aliases, status and capabilities, without exposing private device IDs. The required `device_id` argument accepts either a handle or an alias. Disconnects, reconnects, and adding or removing devices do not change the handle.
 
-Each selected connection exposes `workspace_mode`: Worker defaults to `local_sync` (local source mappings); SSH defaults to `remote` (target repository). Both modes permit execution without synchronization. In remote mode, run `AgentRelay exec --device linux-dev --dir /home/dev/repo "pwd"` directly. `--dir-kind local|remote|auto` (MCP `working_dir_kind`) resolves path ambiguity. Remote mode disables sync to protect its source repository. Policies and mappings belong to each connection and can be edited in the GUI.
+Each device exposes `workspace_mode`: Worker defaults to `local_sync` (local source mappings); SSH defaults to `remote` (target repository). Both modes permit execution without synchronization. In remote mode, run `AgentRelay exec --device linux-dev --dir /home/dev/repo "pwd"` directly. `--dir-kind local|remote|auto` (MCP `working_dir_kind`) resolves path ambiguity. Remote mode disables sync to protect its source repository. Policies and mappings belong to each connection and can be edited in the GUI.
 
 Use sessions for long-lived shell processes:
 
@@ -82,7 +83,7 @@ AgentRelay session get --device <id> --id <session-id>
 AgentRelay session close --device <id> --id <session-id>
 ```
 
-Remote paths are checked against the selected connection's authorized root; absolute target paths are normalized to relative paths before execution. `sync` compares SHA-256 manifests and uploads changed files in bounded chunks, so directories and individual files are not limited by the 32 MiB RPC payload cap. It applies nested `.gitignore` files and a root `.agentrelayignore` by default; repeat `--exclude` for additional gitignore-compatible patterns or use `--no-gitignore`. `--mode update` keeps remote extras, while `--mode mirror` removes only files managed by an earlier sync and now absent locally. `--dry-run` reports the plan without changing the Worker. A successful sync persists the local-project-to-remote-root mapping, so later commands can use the same local project directory. Tasks and sessions are in memory and are not reconstructed after a Worker process restart.
+Remote paths are checked against the device connection's authorized root; absolute target paths are normalized to relative paths before execution. `sync` compares SHA-256 manifests and uploads changed files in bounded chunks, so directories and individual files are not limited by the 32 MiB RPC payload cap. It applies nested `.gitignore` files and a root `.agentrelayignore` by default; repeat `--exclude` for additional gitignore-compatible patterns or use `--no-gitignore`. `--mode update` keeps remote extras, while `--mode mirror` removes only files managed by an earlier sync and now absent locally. `--dry-run` reports the plan without changing the Worker. A successful sync persists the local-project-to-remote-root mapping, so later commands can use the same local project directory. Tasks and sessions are in memory and are not reconstructed after a Worker process restart.
 
 Manage authorization without pairing again:
 

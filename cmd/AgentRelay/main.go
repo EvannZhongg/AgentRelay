@@ -16,16 +16,7 @@ import (
 )
 
 func publicDevices(devices []protocol.Device) []map[string]any {
-	devices = controller.SortDevices(devices)
-	out := make([]map[string]any, 0, len(devices))
-	for _, d := range devices {
-		selector := d.Handle
-		if selector == "" {
-			selector = d.Name
-		}
-		out = append(out, map[string]any{"device": selector, "handle": d.Handle, "alias": d.Name, "online": d.Online, "authorized": d.Authorized, "desktop_access": d.DesktopAccess, "os": d.OS, "architecture": d.Architecture, "workspace": d.Workspace, "workspace_mode": d.WorkspaceMode, "workspace_mappings": d.Mappings, "capabilities": d.Capabilities, "last_seen": d.LastSeen})
-	}
-	return out
+	return controller.AgentDevices(devices)
 }
 
 func main() {
@@ -261,6 +252,6 @@ func printJSON(v any) error {
 	return err
 }
 func usage() {
-	fmt.Println("Connection management: AgentRelay connection add-ssh|list|test|select|remove|attach-worker")
+	fmt.Println("Connection management: AgentRelay connection add-ssh|show|test|replace-ssh|replace-worker")
 	fmt.Println("AgentRelay\n\nUsage:\n  AgentRelay setup\n  AgentRelay controller serve\n  AgentRelay gui\n  AgentRelay device list|rename|authorize|revoke|remove\n  AgentRelay exec --device <alias|handle> [--dir <local-project-or-remote-path>] <command>\n  AgentRelay task start|list|get|retrieve|cancel --device <alias|handle> [--id <task-id>]\n  AgentRelay sync --device <alias|handle> --source <dir> [--mode update|mirror] [--dry-run]\n  AgentRelay pull --device <alias|handle> [--out <local-dir>] <remote-path>...\n  AgentRelay session create|list|get|send|close --device <alias|handle> [--id <session-id>]\n  AgentRelay desktop info|capture|input --device <alias|handle> [--json <object>]\n  AgentRelay mcp config")
 }

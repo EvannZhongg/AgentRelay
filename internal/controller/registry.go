@@ -8,7 +8,7 @@ import (
 )
 
 // Validate state before writing anything. Identity/configuration are never
-// synthesized to repair existing data, and orphaned selections are rejected.
+// synthesized to repair existing data; missing or extra bindings are rejected.
 func (s *Server) validateRegistry() error {
 	handles := map[string]bool{}
 	for id, rec := range s.store.Devices {
@@ -17,16 +17,15 @@ func (s *Server) validateRegistry() error {
 			return errors.New("invalid device identity, handle or alias")
 		}
 		handles[strings.ToLower(d.Handle)] = true
-		if d.ActiveConnection != "" {
-			c, ok := s.store.Connections[d.ActiveConnection]
-			if !ok || c.Connection.DeviceID != id {
-				return errors.New("invalid device connection selection")
-			}
+		c, ok := s.store.Connections[d.ConnectionID]
+		if !ok || c.Connection.DeviceID != id {
+			return errors.New("device must bind exactly one connection")
 		}
 	}
 	for id, rec := range s.store.Connections {
 		c := rec.Connection
-		if _, ok := s.store.Devices[c.DeviceID]; !ok || c.ID != id || c.Revision == "" {
+		d, ok := s.store.Devices[c.DeviceID]
+		if !ok || d.Device.ConnectionID != id || c.ID != id || c.Revision == "" {
 			return errors.New("invalid connection identity or revision")
 		}
 		if c.Kind == "worker" && rec.TokenHash == "" {

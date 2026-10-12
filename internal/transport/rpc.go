@@ -61,6 +61,13 @@ func NewPeer(conn *websocket.Conn, handler Handler) *Peer {
 	return p
 }
 func (p *Peer) Done() <-chan struct{} { return p.done }
+
+// ActiveRequests includes received requests whose handlers have not yet run.
+func (p *Peer) ActiveRequests() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.active)
+}
 func (p *Peer) Close() {
 	p.once.Do(func() {
 		close(p.done)

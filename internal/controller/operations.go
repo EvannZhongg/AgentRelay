@@ -25,7 +25,7 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	id, resolveErr := ResolveDeviceSelector(devices, selector)
 	rec, ok := s.store.Devices[id]
-	connection := s.store.Connections[rec.Device.ActiveConnection].Connection
+	connection := s.store.Connections[rec.Device.ConnectionID].Connection
 	s.mu.RUnlock()
 	if resolveErr != nil || !ok {
 		if resolveErr != nil {
@@ -39,7 +39,7 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 		s.updateDevice(w, r, id)
 		return
 	}
-	if parts[1] == "connections" {
+	if parts[1] == "connection" {
 		s.connectionRoute(w, r, id, parts[2:])
 		return
 	}
@@ -58,13 +58,33 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !connection.Online {
-		writeError(w, 503, errors.New("device offline; test its connection or reconnect"))
+		writeError(w, 503, errors.New("device offline"))
 		return
 	}
 	if strings.HasPrefix(endpoint, "/v1/desktop") && rec.Device.DesktopAccess == "revoked" {
 		writeError(w, http.StatusForbidden, errors.New("desktop control permission is revoked"))
 		return
 	}
+	// Keep the operation reserved through response processing and sync bookkeeping.
+	s.mu.Lock()
+	if !s.connectionUnchangedLocked(id, connection) || s.changing[id] {
+		s.mu.Unlock()
+		writeError(w, 409, errors.New("device connection changed or is being changed"))
+		return
+	}
+	if s.operations == nil {
+		s.operations = map[string]int{}
+	}
+	s.operations[id]++
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.operations[id]--
+		if s.operations[id] == 0 {
+			delete(s.operations, id)
+		}
+		s.mu.Unlock()
+	}()
 	data, err := io.ReadAll(io.LimitReader(r.Body, (32<<20)+1))
 	if err != nil || len(data) > 32<<20 {
 		writeError(w, 413, errors.New("RPC payload exceeds 32 MiB"))
@@ -124,7 +144,7 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 	var resp transport.Response
 	if capability == "" {
 		if strings.HasPrefix(endpoint, "/v1/device") {
-			resp.Body, _ = json.Marshal(s.agentDevice(rec.Device))
+			resp.Body, _ = json.Marshal(AgentDeviceView(rec.Device))
 			resp.Status = 200
 		} else {
 			resp.Body, _ = json.Marshal(protocol.Health{Status: "ok", APIVersion: protocol.APIVersion})
@@ -148,7 +168,16 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			s.markConnectionFailed(connection, err)
 		}
-		writeError(w, 502, err)
+		// Transport diagnostics may contain private hosts, users or key paths.
+		// Keep them in the management view, outside the Agent operation surface.
+		message := "device operation failed; ask the user to check device availability"
+		if errors.Is(err, context.Canceled) {
+			message = "device operation cancelled"
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			message = "device operation timed out"
+		}
+		writeError(w, 502, errors.New(message))
 		return
 	}
 	if isSyncStart && resp.Status < http.StatusMultipleChoices {

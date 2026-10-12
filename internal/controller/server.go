@@ -45,6 +45,8 @@ type Server struct {
 	calls        map[string]map[string]context.CancelFunc
 	pairings     map[string]*pendingPairing
 	syncMappings map[syncMappingKey]syncMapping
+	operations   map[string]int
+	changing     map[string]bool
 	syncStarts   map[string]int
 }
 
@@ -81,10 +83,10 @@ func New(cfg Config) (*Server, error) {
 	if err := state.Load(cfg.StatePath, &s.store); err != nil {
 		return nil, fmt.Errorf("load controller state: %w", err)
 	}
-	if s.store.Schema != 3 && (s.store.Schema != 0 || s.store.Identity.Certificate != "" || len(s.store.Devices) != 0 || len(s.store.Connections) != 0) {
+	if s.store.Schema != 4 && (s.store.Schema != 0 || s.store.Identity.Certificate != "" || len(s.store.Devices) != 0 || len(s.store.Connections) != 0) {
 		return nil, errors.New("unsupported controller state schema; initialize a new state file")
 	}
-	s.store.Schema = 3
+	s.store.Schema = 4
 	for _, rec := range s.store.Devices {
 		if rec.Device.Handle == "" {
 			return nil, errors.New("invalid device state: missing handle")
@@ -129,9 +131,9 @@ func (s *Server) save() error {
 	snapshot := s.store
 	snapshot.Devices = make(map[string]record, len(s.store.Devices))
 	for id, r := range s.store.Devices {
-		// Device records persist identity and selection; all connection projections
+		// Device records persist identity and the unique binding; connection projections
 		// are reconstructed from the connection registry.
-		d := protocol.Device{ID: r.Device.ID, Handle: r.Device.Handle, Name: r.Device.Name, Authorized: r.Device.Authorized, DesktopAccess: r.Device.DesktopAccess, ActiveConnection: r.Device.ActiveConnection}
+		d := protocol.Device{ID: r.Device.ID, Handle: r.Device.Handle, Name: r.Device.Name, Authorized: r.Device.Authorized, DesktopAccess: r.Device.DesktopAccess, ConnectionID: r.Device.ConnectionID}
 		snapshot.Devices[id] = record{Device: d}
 	}
 	return state.Save(s.cfg.StatePath, snapshot)

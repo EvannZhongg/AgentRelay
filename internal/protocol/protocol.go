@@ -5,23 +5,23 @@ import "time"
 const APIVersion = "v1"
 
 type Device struct {
-	ActiveConnection string            `json:"active_connection,omitempty"`
-	Connections      []Connection      `json:"connections,omitempty"`
-	ID               string            `json:"id"`
-	Handle           string            `json:"handle,omitempty"`
-	Name             string            `json:"name"`
-	OS               string            `json:"os"`
-	OSVersion        string            `json:"os_version,omitempty"`
-	Architecture     string            `json:"architecture"`
-	Authorized       bool              `json:"authorized"`
-	DesktopAccess    string            `json:"desktop_access,omitempty"`
-	Workspace        string            `json:"workspace"`
-	WorkspaceMode    string            `json:"workspace_mode"`
-	Mappings         map[string]string `json:"workspace_mappings,omitempty"`
-	Capabilities     Capabilities      `json:"capabilities"`
-	Metadata         map[string]string `json:"metadata,omitempty"`
-	LastSeen         time.Time         `json:"last_seen"`
-	Online           bool              `json:"online"`
+	ConnectionID  string            `json:"connection_id,omitempty"`
+	Connection    *Connection       `json:"connection,omitempty"`
+	ID            string            `json:"id"`
+	Handle        string            `json:"handle,omitempty"`
+	Name          string            `json:"name"`
+	OS            string            `json:"os"`
+	OSVersion     string            `json:"os_version,omitempty"`
+	Architecture  string            `json:"architecture"`
+	Authorized    bool              `json:"authorized"`
+	DesktopAccess string            `json:"desktop_access,omitempty"`
+	Workspace     string            `json:"workspace"`
+	WorkspaceMode string            `json:"workspace_mode"`
+	Mappings      map[string]string `json:"workspace_mappings,omitempty"`
+	Capabilities  Capabilities      `json:"capabilities"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	LastSeen      time.Time         `json:"last_seen"`
+	Online        bool              `json:"online"`
 }
 
 type Capabilities struct {

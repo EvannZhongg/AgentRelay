@@ -3,7 +3,6 @@ package controller
 import (
 	"AgentRelay/internal/protocol"
 	"AgentRelay/internal/transport"
-	"AgentRelay/internal/workspace"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -12,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math/big"
 	"net/http"
 	"sort"
@@ -130,63 +128,37 @@ func (s *Server) pairRequestAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, protocol.PairingStatus{PairingRequest: pending.request, Status: pending.status})
 		return
 	}
-	var attach struct {
-		DeviceID string `json:"device_id"`
-	}
+	// Approval creates a new device. Existing devices can only be changed by
+	// the explicit connection replacement action.
 	if r.Body != nil && r.ContentLength != 0 {
-		if err := readJSON(r, &attach); err != nil && err != io.EOF {
+		var approval struct{}
+		if err := readJSON(r, &approval); err != nil {
 			writeError(w, 400, err)
 			return
 		}
 	}
-	id, token, connectionID := transport.Token(), transport.Token(), transport.Token()
+	id := transport.Token()
 	proposed := pending.request.Device
-	policy := protocol.WorkspacePolicy{Root: proposed.Workspace, Mode: proposed.WorkspaceMode}
-	if policy.Mode == "" {
-		policy.Mode = protocol.WorkspaceLocalSync
+	d := protocol.Device{ID: id, Handle: s.newDeviceHandleLocked(), Name: proposed.Name, Authorized: true, DesktopAccess: "granted"}
+	if !s.aliasAvailableLocked(d.Name, "") {
+		writeError(w, 409, errors.New("device alias is already in use"))
+		return
 	}
-	if err := workspace.Validate(policy); err != nil {
+	c, credentials, err := s.pairedConnection(id, proposed)
+	if err != nil {
 		writeError(w, 400, err)
 		return
 	}
-	d := proposed
-	if attach.DeviceID != "" {
-		existing, ok := s.store.Devices[attach.DeviceID]
-		if !ok || !existing.Device.Authorized {
-			writeError(w, 400, errors.New("target device must be authorized"))
-			return
-		}
-		id = attach.DeviceID
-		d = existing.Device
-	} else {
-		d.ID = id
-		d.Handle = s.newDeviceHandleLocked()
-		if strings.EqualFold(strings.TrimSpace(d.Name), d.Handle) || !s.aliasAvailableLocked(d.Name, "") {
-			writeError(w, http.StatusConflict, errors.New("device alias is already in use"))
-			return
-		}
-		d.Authorized = true
-		d.DesktopAccess = "granted"
-		d.Online = false
-		d.LastSeen = time.Time{}
-		d.Mappings = map[string]string{}
-		d.ActiveConnection = connectionID
-	}
-	credentials := &protocol.Credentials{Schema: 3, DeviceID: id, ConnectionID: connectionID, Token: token, Workspace: policy.Root, Fingerprint: s.Fingerprint()}
-	previous, existed := s.store.Devices[id]
+	d.ConnectionID = c.Connection.ID
 	s.store.Devices[id] = record{Device: d}
-	s.store.Connections[connectionID] = connectionRecord{Connection: protocol.Connection{ID: connectionID, DeviceID: id, Kind: "worker", Revision: transport.Token(), Workspace: policy, OS: proposed.OS, Architecture: proposed.Architecture, Capabilities: proposed.Capabilities}, TokenHash: tokenHash(token)}
+	s.store.Connections[c.Connection.ID] = c
+	s.refreshDeviceLocked(id)
 	if err := s.save(); err != nil {
-		if existed {
-			s.store.Devices[id] = previous
-		} else {
-			delete(s.store.Devices, id)
-		}
-		delete(s.store.Connections, connectionID)
-		writeError(w, http.StatusInternalServerError, err)
+		delete(s.store.Devices, id)
+		delete(s.store.Connections, c.Connection.ID)
+		writeError(w, 500, err)
 		return
 	}
-	s.refreshDeviceLocked(id)
 	pending.status = "approved"
 	pending.credentials = credentials
 	writeJSON(w, http.StatusOK, protocol.PairingStatus{PairingRequest: pending.request, Status: pending.status, Credentials: credentials})
@@ -206,9 +178,14 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	rec, ok := s.store.Devices[id]
 	connection, connected := s.store.Connections[connectionID]
-	if !ok || !connected || connection.Connection.DeviceID != id || connection.Connection.Kind != "worker" || !rec.Device.Authorized || subtle.ConstantTimeCompare([]byte(connection.TokenHash), []byte(tokenHash(token))) != 1 {
+	if !ok || !connected || rec.Device.ConnectionID != connectionID || connection.Connection.DeviceID != id || connection.Connection.Kind != "worker" || !rec.Device.Authorized || subtle.ConstantTimeCompare([]byte(connection.TokenHash), []byte(tokenHash(token))) != 1 {
 		s.mu.Unlock()
 		writeError(w, 401, errors.New("device is not authorized; pair again"))
+		return
+	}
+	if s.changing[id] {
+		s.mu.Unlock()
+		writeError(w, 409, errors.New("connection change in progress; retry reconnect"))
 		return
 	}
 	var peer *transport.Peer
@@ -226,7 +203,7 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		current, exists := s.store.Devices[id]
-		if !exists || s.workerPeers[connectionID] != peer || !current.Device.Authorized || d.ID != id || d.Workspace != s.store.Connections[connectionID].Connection.Workspace.Root {
+		if !exists || current.Device.ConnectionID != connectionID || s.workerPeers[connectionID] != peer || !current.Device.Authorized || d.ID != id || d.Workspace != s.store.Connections[connectionID].Connection.Workspace.Root {
 			return transport.Response{Status: 403}
 		}
 		previous := current

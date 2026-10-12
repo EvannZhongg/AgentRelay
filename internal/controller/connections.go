@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"sort"
 	"time"
 )
 
@@ -22,9 +21,13 @@ func (s *Server) callConnection(ctx context.Context, c protocol.Connection, req 
 	s.mu.Lock()
 	current, ok := s.store.Connections[c.ID]
 	d, exists := s.store.Devices[c.DeviceID]
-	if !ok || !exists || !d.Device.Authorized || current.Connection.Revision != c.Revision {
+	if !ok || !exists || !d.Device.Authorized || d.Device.ConnectionID != c.ID || current.Connection.Revision != c.Revision {
 		s.mu.Unlock()
 		return transport.Response{}, &backend.Error{Status: 403, Message: "connection authorization or configuration changed"}
+	}
+	if s.changing[c.DeviceID] {
+		s.mu.Unlock()
+		return transport.Response{}, &backend.Error{Status: 409, Message: "device connection is being changed"}
 	}
 	adapter := s.adapters[c.Kind]
 	if adapter == nil {
@@ -80,7 +83,7 @@ func (s *Server) refreshDeviceLocked(id string) {
 	if !ok {
 		return
 	}
-	c := s.store.Connections[r.Device.ActiveConnection].Connection
+	c := s.store.Connections[r.Device.ConnectionID].Connection
 	r.Device.Workspace = c.Workspace.Root
 	r.Device.WorkspaceMode = c.Workspace.Mode
 	r.Device.Mappings = c.Workspace.Mappings
@@ -96,18 +99,8 @@ func (s *Server) refreshDeviceLocked(id string) {
 	s.store.Devices[id] = r
 }
 func (s *Server) deviceViewLocked(d protocol.Device) protocol.Device {
-	d.Connections = []protocol.Connection{}
-	for _, r := range s.store.Connections {
-		if r.Connection.DeviceID == d.ID {
-			d.Connections = append(d.Connections, r.Connection)
-		}
-	}
-	sort.Slice(d.Connections, func(i, j int) bool { return d.Connections[i].ID < d.Connections[j].ID })
-	return d
-}
-func (s *Server) agentDevice(d protocol.Device) protocol.Device {
-	d.ActiveConnection = ""
-	d.Connections = nil
+	c := s.store.Connections[d.ConnectionID].Connection
+	d.Connection = &c
 	return d
 }
 func (s *Server) hasSyncMappingsLocked(id string) bool {
@@ -127,7 +120,7 @@ func (s *Server) beginSyncStart(id, cid string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d, ok := s.store.Devices[id]
-	if !ok || !d.Device.Authorized || d.Device.ActiveConnection != cid {
+	if !ok || !d.Device.Authorized || d.Device.ConnectionID != cid || s.changing[id] {
 		return errors.New("device connection changed before sync started")
 	}
 	if s.syncStarts == nil {
@@ -184,7 +177,7 @@ func (s *Server) createDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	id := transport.Token()
 	c := s.newConnection(id, in.Connection)
-	d := protocol.Device{ID: id, Handle: s.newDeviceHandleLocked(), Name: in.Name, Authorized: true, DesktopAccess: "granted", ActiveConnection: c.ID}
+	d := protocol.Device{ID: id, Handle: s.newDeviceHandleLocked(), Name: in.Name, Authorized: true, DesktopAccess: "granted", ConnectionID: c.ID}
 	s.store.Devices[id] = record{Device: d}
 	s.store.Connections[c.ID] = connectionRecord{Connection: c}
 	s.refreshDeviceLocked(id)
@@ -199,135 +192,81 @@ func (s *Server) createDevice(w http.ResponseWriter, r *http.Request) {
 
 // Connection management belongs to the loopback controller UI/API, not MCP.
 func (s *Server) connectionRoute(w http.ResponseWriter, r *http.Request, id string, parts []string) {
-	if len(parts) == 0 {
-		if r.Method != "POST" {
-			methodNotAllowed(w)
-			return
-		}
-		var in protocol.ConnectionSpec
-		if err := readJSON(r, &in); err != nil {
-			writeError(w, 400, err)
-			return
-		}
-		if in.Kind == "worker" {
-			writeError(w, 400, errors.New("Worker connections require approved pairing"))
-			return
-		}
-		if err := s.validateSpec(in); err != nil {
-			writeError(w, 400, err)
-			return
-		}
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if _, ok := s.store.Devices[id]; !ok {
-			writeError(w, 404, errors.New("device not found"))
-			return
-		}
-		configured := s.newConnection(id, in)
-		cid := configured.ID
-		c := connectionRecord{Connection: configured}
-		s.store.Connections[cid] = c
-		if err := s.save(); err != nil {
-			delete(s.store.Connections, cid)
-			writeError(w, 500, err)
-			return
-		}
-		writeJSON(w, 201, c.Connection)
+	if len(parts) == 1 && parts[0] == "replace" && r.Method == "POST" {
+		s.replaceConnection(w, r, id)
 		return
 	}
-	cid := parts[0]
 	s.mu.RLock()
-	c, ok := s.store.Connections[cid]
-	d, exists := s.store.Devices[id]
+	d := s.store.Devices[id].Device
+	c := s.store.Connections[d.ConnectionID]
 	s.mu.RUnlock()
-	revision := c.Connection.Revision
-	if !ok || !exists || c.Connection.DeviceID != id {
-		writeError(w, 404, errors.New("connection not found"))
+	if len(parts) == 1 && parts[0] == "test" && r.Method == "POST" {
+		s.testConnection(w, r, d, c)
 		return
 	}
-	if len(parts) == 2 && parts[1] == "test" && r.Method == "POST" {
-		s.testConnection(w, r, d.Device, c)
-		return
-	}
-	if len(parts) != 1 {
+	if len(parts) != 0 {
 		writeError(w, 404, errors.New("unknown connection operation"))
 		return
 	}
-	if r.Method != "DELETE" && r.Method != "PATCH" {
+	if r.Method != "PATCH" {
 		methodNotAllowed(w)
 		return
 	}
 	var in protocol.ConnectionSpec
-	if r.Method == "PATCH" {
-		if err := readJSON(r, &in); err != nil {
-			writeError(w, 400, err)
-			return
-		}
-		if in.Kind != c.Connection.Kind {
-			writeError(w, 400, errors.New("connection transport kind is immutable"))
-			return
-		}
-		if in.Kind == "worker" && in.Workspace.Root != c.Connection.Workspace.Root {
-			writeError(w, 400, errors.New("Worker workspace root changes require pairing"))
-			return
-		}
-		if err := s.validateSpec(in); err != nil {
-			writeError(w, 400, err)
-			return
-		}
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	c, ok = s.store.Connections[cid]
-	d, exists = s.store.Devices[id]
-	if !ok || !exists || c.Connection.DeviceID != id {
-		writeError(w, 404, errors.New("connection not found"))
+	if err := readJSON(r, &in); err != nil {
+		writeError(w, 400, err)
 		return
 	}
-	if c.Connection.Revision != revision {
+	if in.Kind != c.Connection.Kind {
+		writeError(w, 400, errors.New("use replace to change connection method"))
+		return
+	}
+	if in.Kind == "worker" && in.Workspace.Root != c.Connection.Workspace.Root {
+		writeError(w, 400, errors.New("Worker workspace root changes require replacement with approved pairing"))
+		return
+	}
+	if err := s.validateSpec(in); err != nil {
+		writeError(w, 400, err)
+		return
+	}
+	old, err := s.beginConnectionChange(r.Context(), id)
+	if err != nil {
+		writeError(w, 409, err)
+		return
+	}
+	defer s.endConnectionChange(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if old.Connection.Revision != c.Connection.Revision || !s.connectionUnchangedLocked(id, old.Connection) {
 		writeError(w, 409, errors.New("connection changed while applying configuration"))
 		return
 	}
-	if d.Device.ActiveConnection == cid && s.hasSyncMappingsLocked(id) {
-		writeError(w, 409, errors.New("abort or finish active syncs before changing this connection"))
-		return
+	previousDevice := s.store.Devices[id]
+	// Registration/disconnection may update status during the activity probe.
+	old = s.store.Connections[old.Connection.ID]
+	updated := old
+	updated.Connection.SSH = in.SSH
+	updated.Connection.Options = in.Options
+	updated.Connection.Workspace = in.Workspace
+	updated.Connection.Revision = transport.Token()
+	if in.Kind != "worker" {
+		updated.Connection.Online = false
+		updated.Connection.OS = ""
+		updated.Connection.Architecture = ""
+		updated.Connection.Metadata = nil
+		updated.Connection.LastSeen = time.Time{}
+		updated.Connection.Capabilities = s.adapters[in.Kind].Capabilities()
 	}
-	if r.Method == "DELETE" {
-		delete(s.store.Connections, cid)
-		if d.Device.ActiveConnection == cid {
-			updated := d
-			updated.Device.ActiveConnection = ""
-			s.store.Devices[id] = updated
-		}
-	} else {
-		updated := c
-		updated.Connection.SSH = in.SSH
-		updated.Connection.Options = in.Options
-		updated.Connection.Workspace = in.Workspace
-		updated.Connection.Revision = transport.Token()
-		if in.Kind != "worker" {
-			updated.Connection.Online = false
-		}
-		updated.Connection.LastError = ""
-		s.store.Connections[cid] = updated
-	}
+	updated.Connection.LastError = ""
+	s.store.Connections[old.Connection.ID] = updated
 	s.refreshDeviceLocked(id)
 	if err := s.save(); err != nil {
-		s.store.Connections[cid] = c
-		s.store.Devices[id] = d
+		s.store.Connections[old.Connection.ID] = old
+		s.store.Devices[id] = previousDevice
 		writeError(w, 500, err)
 		return
 	}
-	s.cancelConnectionLocked(cid)
-	if r.Method == "DELETE" {
-		if peer := s.workerPeers[cid]; peer != nil {
-			peer.Close()
-		}
-		delete(s.workerPeers, cid)
-		w.WriteHeader(204)
-	} else {
-		writeJSON(w, 200, s.store.Connections[cid].Connection)
-	}
+	writeJSON(w, 200, updated.Connection)
 }
 
 func (s *Server) testConnection(w http.ResponseWriter, r *http.Request, d protocol.Device, c connectionRecord) {

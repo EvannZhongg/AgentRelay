@@ -144,3 +144,35 @@ func TestRPCCancellationAndDisconnect(t *testing.T) {
 		})
 	}
 }
+
+func TestActiveRequestsRetainedUntilCancelledHandlerExits(t *testing.T) {
+	started, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	a, b := peerPair(t, nil, func(ctx context.Context, _ Request) Response {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+		return Response{Status: 408}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := a.Call(ctx, Request{Method: "POST", Path: "/queued"}); done <- err }()
+	<-started
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("request was not cancelled")
+	}
+	<-cancelled
+	if b.ActiveRequests() != 1 {
+		t.Fatal("cancelled request discarded before remote handler finished")
+	}
+	close(release)
+	deadline := time.Now().Add(time.Second)
+	for b.ActiveRequests() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("finished handler remained active")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}

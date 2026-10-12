@@ -27,10 +27,9 @@ func (s *Server) devicesRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 type DeviceUpdate struct {
-	ActiveConnection *string `json:"active_connection,omitempty"`
-	Name             *string `json:"name,omitempty"`
-	Authorized       *bool   `json:"authorized,omitempty"`
-	DesktopAccess    *string `json:"desktop_access,omitempty"`
+	Name          *string `json:"name,omitempty"`
+	Authorized    *bool   `json:"authorized,omitempty"`
+	DesktopAccess *string `json:"desktop_access,omitempty"`
 }
 
 func validAlias(value string) bool {
