@@ -12,7 +12,7 @@ import (
 const Port = 8763
 const query = "AgentRelay discover v1"
 
-type Bridge struct {
+type Controller struct {
 	Name        string `json:"name"`
 	URL         string `json:"url"`
 	Fingerprint string `json:"fingerprint"`
@@ -26,7 +26,7 @@ func Serve(ctx context.Context, name, fingerprint string, port int) error {
 	}
 	defer conn.Close()
 	go func() { <-ctx.Done(); _ = conn.Close() }()
-	data, _ := json.Marshal(Bridge{Name: name, Fingerprint: fingerprint, Port: port})
+	data, _ := json.Marshal(Controller{Name: name, Fingerprint: fingerprint, Port: port})
 	buf := make([]byte, 2048)
 	for {
 		n, addr, err := conn.ReadFromUDP(buf)
@@ -39,7 +39,7 @@ func Serve(ctx context.Context, name, fingerprint string, port int) error {
 	}
 }
 
-func Discover(ctx context.Context) ([]Bridge, error) {
+func Discover(ctx context.Context) ([]Controller, error) {
 	conn, err := net.ListenUDP("udp4", nil)
 	if err != nil {
 		return nil, err
@@ -83,7 +83,7 @@ func Discover(ctx context.Context) ([]Bridge, error) {
 		deadline = d
 	}
 	_ = conn.SetReadDeadline(deadline)
-	found := map[string]Bridge{}
+	found := map[string]Controller{}
 	buf := make([]byte, 2048)
 	for {
 		n, addr, err := conn.ReadFromUDP(buf)
@@ -96,14 +96,14 @@ func Discover(ctx context.Context) ([]Bridge, error) {
 			}
 			return nil, err
 		}
-		var item Bridge
+		var item Controller
 		if json.Unmarshal(buf[:n], &item) != nil || item.Port < 1 || item.Port > 65535 || len(item.Fingerprint) != 64 {
 			continue
 		}
 		item.URL = "https://" + net.JoinHostPort(addr.IP.String(), strconv.Itoa(item.Port))
 		found[item.URL] = item
 	}
-	out := make([]Bridge, 0, len(found))
+	out := make([]Controller, 0, len(found))
 	for _, item := range found {
 		out = append(out, item)
 	}

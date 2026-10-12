@@ -1,6 +1,7 @@
-package bridge
+package controller
 
 import (
+	"AgentRelay/internal/protocol"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -9,14 +10,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/image/draw"
 	"image"
 	"image/png"
 	"math"
 	"os"
 	"path/filepath"
-
-	"AgentRelay/internal/protocol"
-	"golang.org/x/image/draw"
 )
 
 func (c *Client) Desktop(ctx context.Context, id string) (out protocol.DesktopInfo, err error) {

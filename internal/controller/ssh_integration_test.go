@@ -1,6 +1,9 @@
-package bridge_test
+package controller_test
 
 import (
+	"AgentRelay/internal/controller"
+	"AgentRelay/internal/protocol"
+	"AgentRelay/internal/state"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -10,10 +13,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"AgentRelay/internal/bridge"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/state"
 )
 
 // Opt-in real OpenSSH test. Supply an isolated test workspace and key files.
@@ -27,7 +26,7 @@ func TestSSHIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("AGENTRELAY_HOME", t.TempDir())
-	s, err := bridge.New(bridge.Config{StatePath: state.Path("bridge")})
+	s, err := controller.New(controller.Config{StatePath: state.Path("controller")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +38,7 @@ func TestSSHIntegration(t *testing.T) {
 	}
 	h.StartTLS()
 	defer h.Close()
-	c, ctx := bridge.NewClient(h.URL), context.Background()
+	c, ctx := controller.NewClient(h.URL), context.Background()
 	d, err := c.CreateDevice(ctx, in)
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +104,7 @@ func TestSSHIntegration(t *testing.T) {
 		t.Fatal("cancellation test command did not start")
 	}
 	no := false
-	if _, err := c.UpdateDevice(ctx, d.Handle, bridge.DeviceUpdate{Authorized: &no}); err != nil {
+	if _, err := c.UpdateDevice(ctx, d.Handle, controller.DeviceUpdate{Authorized: &no}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -117,7 +116,7 @@ func TestSSHIntegration(t *testing.T) {
 		t.Fatal("revocation did not cancel SSH RPC")
 	}
 	yes := true
-	if _, err := c.UpdateDevice(ctx, d.Handle, bridge.DeviceUpdate{Authorized: &yes}); err != nil {
+	if _, err := c.UpdateDevice(ctx, d.Handle, controller.DeviceUpdate{Authorized: &yes}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.TestConnection(ctx, d.ID, d.ActiveConnection); err != nil {
@@ -127,7 +126,7 @@ func TestSSHIntegration(t *testing.T) {
 	if err != nil || result.ExitCode == 0 {
 		t.Fatalf("revoked command's child is still running: %+v %v", result, err)
 	}
-	restarted, err := bridge.New(bridge.Config{StatePath: filepath.Join(os.Getenv("AGENTRELAY_HOME"), "bridge.json")})
+	restarted, err := controller.New(controller.Config{StatePath: filepath.Join(os.Getenv("AGENTRELAY_HOME"), "controller.json")})
 	if err != nil {
 		t.Fatal(err)
 	}

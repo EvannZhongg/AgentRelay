@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"time"
 
-	"AgentRelay/internal/bridge"
+	"AgentRelay/internal/controller"
 	"AgentRelay/internal/discovery"
 )
 
@@ -25,7 +25,7 @@ func guiCommand(args []string) error {
 	if f.NArg() != 0 {
 		return errors.New("usage: AgentRelay gui [--listen :8764]")
 	}
-	s, err := bridge.New(bridge.Config{ListenAddr: *listen})
+	s, err := controller.New(controller.Config{ListenAddr: *listen})
 	if err != nil {
 		return err
 	}

@@ -1,17 +1,17 @@
-package bridge_test
+package controller_test
 
 import (
+	"AgentRelay/internal/controller"
+	"AgentRelay/internal/protocol"
+	"AgentRelay/internal/testshell"
+	"AgentRelay/internal/testutil"
+	"AgentRelay/internal/worker"
 	"context"
 	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"AgentRelay/internal/bridge"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/testutil"
-	"AgentRelay/internal/worker"
 )
 
 func TestMultipleWorkerConnectionsKeepOneDeviceAndRouteExplicitly(t *testing.T) {
@@ -27,7 +27,7 @@ func TestMultipleWorkerConnectionsKeepOneDeviceAndRouteExplicitly(t *testing.T) 
 	credentials := make(chan protocol.Credentials, 1)
 	errorsCh := make(chan error, 1)
 	go func() {
-		c, err := second.Pair(ctx, relay.HTTP.URL, relay.Bridge.Fingerprint(), filepath.Join(t.TempDir(), "second.json"), func(p protocol.PairingRequest) { requests <- p })
+		c, err := second.Pair(ctx, relay.HTTP.URL, relay.Controller.Fingerprint(), filepath.Join(t.TempDir(), "second.json"), func(p protocol.PairingRequest) { requests <- p })
 		credentials <- c
 		errorsCh <- err
 	}()
@@ -53,22 +53,22 @@ func TestMultipleWorkerConnectionsKeepOneDeviceAndRouteExplicitly(t *testing.T) 
 	if _, err := relay.Worker.Connect(ctx, bad); !errors.Is(err, worker.ErrUnauthorized) {
 		t.Fatalf("cross-connection credentials: %v", err)
 	}
-	if _, err := relay.Client.UpdateDevice(ctx, relay.Device.Handle, bridge.DeviceUpdate{ActiveConnection: &creds.ConnectionID}); err != nil {
+	if _, err := relay.Client.UpdateDevice(ctx, relay.Device.Handle, controller.DeviceUpdate{ActiveConnection: &creds.ConnectionID}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := relay.Client.Exec(ctx, relay.Device.Handle, protocol.ExecRequest{Command: "Write-Output selected-worker"})
+	result, err := relay.Client.Exec(ctx, relay.Device.Handle, protocol.ExecRequest{Command: testshell.Native("Write-Output selected-worker", "printf '%s\\n' selected-worker")})
 	if err != nil || !strings.Contains(result.Stdout, "selected-worker") {
 		t.Fatalf("selected RPC: %+v %v", result, err)
 	}
 	peer.Close()
 	testutil.WaitOffline(t, relay.Client, relay.Device.ID)
-	if _, err := relay.Client.Exec(ctx, relay.Device.Handle, protocol.ExecRequest{Command: "Write-Output no-fallback"}); err == nil {
+	if _, err := relay.Client.Exec(ctx, relay.Device.Handle, protocol.ExecRequest{Command: testshell.Native("Write-Output no-fallback", "printf '%s\\n' no-fallback")}); err == nil {
 		t.Fatal("implicitly fell back to another live connection")
 	}
-	if _, err := relay.Client.UpdateDevice(ctx, relay.Device.Handle, bridge.DeviceUpdate{ActiveConnection: &relay.Credentials.ConnectionID}); err != nil {
+	if _, err := relay.Client.UpdateDevice(ctx, relay.Device.Handle, controller.DeviceUpdate{ActiveConnection: &relay.Credentials.ConnectionID}); err != nil {
 		t.Fatal(err)
 	}
-	result, err = relay.Client.Exec(ctx, relay.Device.Handle, protocol.ExecRequest{Command: "Write-Output first-worker"})
+	result, err = relay.Client.Exec(ctx, relay.Device.Handle, protocol.ExecRequest{Command: testshell.Native("Write-Output first-worker", "printf '%s\\n' first-worker")})
 	if err != nil || !strings.Contains(result.Stdout, "first-worker") {
 		t.Fatalf("restored RPC: %+v %v", result, err)
 	}

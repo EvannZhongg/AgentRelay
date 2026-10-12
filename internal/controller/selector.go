@@ -1,11 +1,10 @@
-package bridge
+package controller
 
 import (
+	"AgentRelay/internal/protocol"
 	"fmt"
 	"sort"
 	"strings"
-
-	"AgentRelay/internal/protocol"
 )
 
 // SortDevices returns a stable order for registry views.

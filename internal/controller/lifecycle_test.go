@@ -1,6 +1,13 @@
-package bridge_test
+package controller_test
 
 import (
+	"AgentRelay/internal/controller"
+	"AgentRelay/internal/filesync"
+	"AgentRelay/internal/protocol"
+	"AgentRelay/internal/state"
+	"AgentRelay/internal/testshell"
+	"AgentRelay/internal/testutil"
+	"AgentRelay/internal/worker"
 	"context"
 	"errors"
 	"net"
@@ -10,21 +17,14 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"AgentRelay/internal/bridge"
-	"AgentRelay/internal/filesync"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/state"
-	"AgentRelay/internal/testutil"
-	"AgentRelay/internal/worker"
 )
 
-func restartBridge(t *testing.T, relay *testutil.Relay) (*bridge.Server, *httptest.Server, *bridge.Client) {
+func restartController(t *testing.T, relay *testutil.Relay) (*controller.Server, *httptest.Server, *controller.Client) {
 	t.Helper()
 	address := relay.HTTP.Listener.Addr().String()
-	relay.Bridge.Close()
+	relay.Controller.Close()
 	relay.HTTP.Close()
-	b, err := bridge.New(bridge.Config{StatePath: relay.StatePath})
+	b, err := controller.New(controller.Config{StatePath: relay.StatePath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,10 +42,10 @@ func restartBridge(t *testing.T, relay *testutil.Relay) (*bridge.Server, *httpte
 	server.StartTLS()
 	t.Cleanup(server.Close)
 	t.Cleanup(b.Close)
-	return b, server, bridge.NewClient(server.URL)
+	return b, server, controller.NewClient(server.URL)
 }
 
-func TestBridgeRestartRejectsCommitBeforeWorkerAppliesIt(t *testing.T) {
+func TestControllerRestartRejectsCommitBeforeWorkerAppliesIt(t *testing.T) {
 	relay := testutil.New(t, "")
 	ctx := context.Background()
 	devicePath := "/v1/devices/" + relay.Device.ID
@@ -64,7 +64,7 @@ func TestBridgeRestartRejectsCommitBeforeWorkerAppliesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, _, client := restartBridge(t, relay)
+	_, _, client := restartController(t, relay)
 	peer, err := relay.Worker.Connect(ctx, relay.Credentials)
 	if err != nil {
 		t.Fatal(err)
@@ -72,18 +72,18 @@ func TestBridgeRestartRejectsCommitBeforeWorkerAppliesIt(t *testing.T) {
 	t.Cleanup(peer.Close)
 	commitPath := devicePath + "/files/sync/" + started.ID + "/commit"
 	if err := client.Do(ctx, "POST", commitPath, struct{}{}, nil); err == nil || !strings.Contains(err.Error(), "mapping not found or expired") {
-		t.Fatalf("commit after bridge restart = %v", err)
+		t.Fatalf("commit after controller restart = %v", err)
 	}
 	if err := client.Do(ctx, "DELETE", devicePath+"/files/sync/"+started.ID, nil, nil); err != nil {
 		t.Fatalf("worker session was committed before mapping validation: %v", err)
 	}
 }
 
-func TestBridgeRestartPreservesIdentityMappingsAndWorkerProcesses(t *testing.T) {
+func TestControllerRestartPreservesIdentityMappingsAndWorkerProcesses(t *testing.T) {
 	relay := testutil.New(t, "")
 	ctx := context.Background()
 	alias := "my-build-machine"
-	if _, err := relay.Client.UpdateDevice(ctx, relay.Device.ID, bridge.DeviceUpdate{Name: &alias}); err != nil {
+	if _, err := relay.Client.UpdateDevice(ctx, relay.Device.ID, controller.DeviceUpdate{Name: &alias}); err != nil {
 		t.Fatal(err)
 	}
 	local := t.TempDir()
@@ -100,17 +100,17 @@ func TestBridgeRestartPreservesIdentityMappingsAndWorkerProcesses(t *testing.T) 
 	if !strings.HasPrefix(synced.Root, "projects/") {
 		t.Fatalf("automatic root: %q", synced.Root)
 	}
-	task, err := relay.Client.StartTask(ctx, relay.Device.ID, protocol.TaskRequest{ExecRequest: protocol.ExecRequest{Command: "Start-Sleep -Milliseconds 1500; Write-Output survived"}})
+	task, err := relay.Client.StartTask(ctx, relay.Device.ID, protocol.TaskRequest{ExecRequest: protocol.ExecRequest{Command: testshell.Native("Start-Sleep -Milliseconds 1500; Write-Output survived", "sleep 1.5; printf '%s\\n' survived")}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := relay.Client.CreateSession(ctx, relay.Device.ID, protocol.SessionRequest{WorkingDir: local, Command: "$relayValue = 'retained'"})
+	session, err := relay.Client.CreateSession(ctx, relay.Device.ID, protocol.SessionRequest{WorkingDir: local, Command: testshell.Native("$relayValue = 'retained'", "relayValue='retained'")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _, client := restartBridge(t, relay)
-	if b.Fingerprint() != relay.Bridge.Fingerprint() {
-		t.Fatal("bridge identity changed")
+	b, _, client := restartController(t, relay)
+	if b.Fingerprint() != relay.Controller.Fingerprint() {
+		t.Fatal("controller identity changed")
 	}
 	devices, err := client.Devices(ctx)
 	if err != nil || len(devices) != 1 {
@@ -132,7 +132,7 @@ func TestBridgeRestartPreservesIdentityMappingsAndWorkerProcesses(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(peer.Close)
-	result, err := client.Exec(ctx, d.ID, protocol.ExecRequest{WorkingDir: filepath.Join(local, "sub"), Command: "Get-Content input.txt"})
+	result, err := client.Exec(ctx, d.ID, protocol.ExecRequest{WorkingDir: filepath.Join(local, "sub"), Command: testshell.Native("Get-Content input.txt", "cat input.txt")})
 	if err != nil || !strings.Contains(result.Stdout, "persisted-map") {
 		t.Fatalf("mapped execution: %+v, %v", result, err)
 	}
@@ -148,9 +148,9 @@ func TestBridgeRestartPreservesIdentityMappingsAndWorkerProcesses(t *testing.T) 
 		time.Sleep(20 * time.Millisecond)
 	}
 	if task.Result == nil || !strings.Contains(task.Result.Stdout, "survived") {
-		t.Fatalf("task lost across bridge restart: %+v", task)
+		t.Fatalf("task lost across controller restart: %+v", task)
 	}
-	if _, err = client.WriteSession(ctx, d.ID, session.ID, "Write-Output $relayValue\r\n"); err != nil {
+	if _, err = client.WriteSession(ctx, d.ID, session.ID, testshell.Native("Write-Output $relayValue\r\n", "printf '%s\\n' \"$relayValue\"\n")); err != nil {
 		t.Fatal(err)
 	}
 	deadline = time.Now().Add(5 * time.Second)
@@ -209,7 +209,7 @@ func TestPairingAuthenticationRevocationAndRemoval(t *testing.T) {
 	resultCh := make(chan error, 1)
 	otherState := filepath.Join(t.TempDir(), "worker.json")
 	go func() {
-		_, pairErr := other.Pair(ctx, relay.HTTP.URL, relay.Bridge.Fingerprint(), otherState, func(request protocol.PairingRequest) { requestCh <- request })
+		_, pairErr := other.Pair(ctx, relay.HTTP.URL, relay.Controller.Fingerprint(), otherState, func(request protocol.PairingRequest) { requestCh <- request })
 		resultCh <- pairErr
 	}()
 	pairRequest := <-requestCh
@@ -220,7 +220,7 @@ func TestPairingAuthenticationRevocationAndRemoval(t *testing.T) {
 		t.Fatal(err)
 	}
 	unauthorized := false
-	if _, err = relay.Client.UpdateDevice(ctx, relay.Device.ID, bridge.DeviceUpdate{Authorized: &unauthorized}); err != nil {
+	if _, err = relay.Client.UpdateDevice(ctx, relay.Device.ID, controller.DeviceUpdate{Authorized: &unauthorized}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -231,10 +231,10 @@ func TestPairingAuthenticationRevocationAndRemoval(t *testing.T) {
 	if _, err = relay.Worker.Connect(ctx, relay.Credentials); !errors.Is(err, worker.ErrUnauthorized) {
 		t.Fatalf("revoked credentials accepted: %v", err)
 	}
-	if _, err = relay.Client.Exec(ctx, relay.Device.ID, protocol.ExecRequest{Command: "Write-Output forbidden"}); err == nil {
+	if _, err = relay.Client.Exec(ctx, relay.Device.ID, protocol.ExecRequest{Command: testshell.Native("Write-Output forbidden", "printf '%s\\n' forbidden")}); err == nil {
 		t.Fatal("revoked execution accepted")
 	}
-	_, _, client := restartBridge(t, relay)
+	_, _, client := restartController(t, relay)
 	devices, err := client.Devices(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +247,7 @@ func TestPairingAuthenticationRevocationAndRemoval(t *testing.T) {
 	if err = client.Do(ctx, "DELETE", "/v1/devices/"+relay.Device.ID, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	reloaded, err := bridge.New(bridge.Config{StatePath: relay.StatePath})
+	reloaded, err := controller.New(controller.Config{StatePath: relay.StatePath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestPairingAuthenticationRevocationAndRemoval(t *testing.T) {
 	}
 }
 
-func TestWorkerReconnectsAfterBridgeRestart(t *testing.T) {
+func TestWorkerReconnectsAfterControllerRestart(t *testing.T) {
 	relay := testutil.New(t, "")
 	relay.Peer.Close()
 	testutil.WaitOffline(t, relay.Client, relay.Device.ID)
@@ -269,7 +269,7 @@ func TestWorkerReconnectsAfterBridgeRestart(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- relay.Worker.Run(ctx, relay.Credentials, nil) }()
-	waitOnline := func(client *bridge.Client) {
+	waitOnline := func(client *controller.Client) {
 		t.Helper()
 		deadline := time.Now().Add(6 * time.Second)
 		for time.Now().Before(deadline) {
@@ -282,7 +282,7 @@ func TestWorkerReconnectsAfterBridgeRestart(t *testing.T) {
 		t.Fatal("Worker did not reconnect")
 	}
 	waitOnline(relay.Client)
-	_, _, client := restartBridge(t, relay)
+	_, _, client := restartController(t, relay)
 	waitOnline(client)
 	cancel()
 	select {
@@ -305,7 +305,7 @@ func TestControllerAPIRejectsRemoteCallersAndBrowserOrigins(t *testing.T) {
 			req.Header.Set("Origin", "https://untrusted.example")
 		}
 		out := httptest.NewRecorder()
-		relay.Bridge.Handler().ServeHTTP(out, req)
+		relay.Controller.Handler().ServeHTTP(out, req)
 		if out.Code != 403 {
 			t.Fatalf("remote controller access: %d", out.Code)
 		}

@@ -14,7 +14,7 @@ set "LISTEN=%~1"
 if "%LISTEN%"=="" set "LISTEN=:8764"
 
 echo ==========================================
-echo  AgentRelay bridge
+echo  AgentRelay controller
 echo ==========================================
 echo  listen : %LISTEN%
 echo.
@@ -24,9 +24,9 @@ echo.
 echo  Press Ctrl+C to stop.
 echo.
 
-"%~dp0AgentRelay.exe" bridge serve --listen %LISTEN%
+"%~dp0AgentRelay.exe" controller serve --listen %LISTEN%
 set "CODE=%ERRORLEVEL%"
 echo.
-echo bridge exited with code %CODE%
+echo controller exited with code %CODE%
 pause
 exit /b %CODE%

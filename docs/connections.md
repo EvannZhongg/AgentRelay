@@ -1,68 +1,86 @@
-# Devices, Connections And Capabilities
+# Devices, Connections And Workspaces
 
-A Device owns a stable handle, alias, authorization, workspace and project mappings. A Connection owns its transport configuration, credentials, advertised capabilities and live status. A device may have several connections and exactly one selected execution connection. MCP lists the device once and omits connection IDs, SSH settings and credentials.
+A device owns identity and authorization. Each connection independently owns a transport, root, workspace mode, source mappings and capabilities. MCP presents one stable handle/alias per device with the selected policy/capabilities, omitting SSH configuration, credentials and private IDs.
 
-| Capability | Pure SSH v1 | Native Worker |
+| Capability | SSH | Native Worker |
 | --- | --- | --- |
-| Execute native commands | Yes, `/bin/sh` | Yes, native shell |
-| Read workspace files | Yes, up to 16 MiB per file | Yes |
-| Incremental sync | No | Yes |
-| Background tasks / persistent sessions | No | Yes |
-| Desktop info / capture / input | No | Optional, native OS and interactive session dependent |
+| Execute | POSIX shell | Windows PowerShell / macOS and Linux sh |
+| Read files | Up to 16 MiB per file | Yes |
+| Incremental sync | Unavailable | Available in local_sync mode |
+| Tasks / persistent sessions | Unavailable | Yes |
+| Desktop | Unavailable | Optional Windows/macOS; Linux unsupported |
 
-`internal/backend` defines separate Exec, Files, Sync, Tasks, Sessions and Desktop interfaces, composed as optional capabilities. The RPC adapters invoke these capabilities through either transport. The ephemeral Python executor belongs to the capability backend; the SSH transport only opens channels and carries RPC. Worker desktop operations continue to use `internal/desktop.Backend` and its validation service. SSH and WSS carry execution requests; neither runs agent reasoning.
+## SSH With A Remote Repository
 
-## Pure SSH Setup
+Controller uses OpenSSH, key/agent authentication, batch mode and strict known-host checking. The current SSH executor requires Python 3 and a POSIX shell on the target; these requirements apply only to SSH. The helper is ephemeral and no AgentRelay listener or binary is installed there.
 
-The controller requires OpenSSH `ssh`. The remote target requires a POSIX shell, Python 3 and an existing absolute workspace directory. There is no AgentRelay binary, listener, persistent helper or service to deploy on the SSH target. Each request starts a Python standard-library RPC executor in memory through an SSH channel.
-
-Use key authentication through an identity file, default OpenSSH identities or ssh-agent. SSH runs in batch mode with strict host-key checking; provision a verified host key in known_hosts before testing. SSH config-file overrides, passwords and interactive prompts are not supported. Connection configuration contains local file paths, never private-key contents or passwords.
-
-In `AgentRelay gui`, open **添加 SSH 连接**, select **创建新设备**, fill the alias, workspace, host, user, port and optional key/known_hosts paths. Add the connection, then click **测试**. For an existing device, select it in the same form or click **为此设备添加 SSH**. Use **设为执行连接** to select a connection. Edits invalidate the last connectivity test; run **测试** again.
-
-CLI equivalents:
-
-```powershell
-AgentRelay connection add-ssh --name linux-build --workspace /home/builder/work --host 192.168.1.20 --user builder --identity-file C:\keys\builder
-AgentRelay connection list --device linux-build
-AgentRelay connection test --device linux-build --id <connection-id>
-AgentRelay exec --device linux-build "uname -a"
-AgentRelay connection select --device linux-build --id <connection-id>
-AgentRelay connection remove --device linux-build --id <connection-id>
+```text
+AgentRelay connection add-ssh --name linux-dev --workspace /home/dev/repo --host 192.168.1.20 --user dev
+AgentRelay connection list --device linux-dev
+AgentRelay connection test --device linux-dev --id <connection-id>
+AgentRelay exec --device linux-dev --dir /home/dev/repo/src "pwd"
 ```
 
-Add SSH to an existing device with `connection add-ssh --device <handle-or-alias> --host ... --user ...`. It uses that device's workspace. SSH v1 requires a POSIX workspace, so attaching SSH to a Windows Worker workspace is unsupported.
+SSH defaults to remote mode: the repository stays on the target and no local project/sync step is required. Supply an independent `--workspace` when adding SSH to an existing device. Roots need not match other connections. SSH edits reset connectivity; test again before execution.
 
-## Add Worker To The Same Device
+## Worker Pairing
 
-Pair a native Worker normally, using exactly the same workspace path. At approval, choose **附加到 [device]** instead of **创建新设备**. The controller issues new credentials for the Worker connection, retains the existing handle and alias, and leaves the selected execution connection unchanged. There is no automatic hostname matching or device merge.
-
-Terminal approval to attach a pending pairing:
-
-```powershell
-AgentRelay connection attach-worker --device linux-build --id <pairing-request-id>
+```text
+AgentRelay-worker setup --workspace <target-root>
+AgentRelay-worker serve
 ```
 
-Connections are selected explicitly. Unsupported operations return HTTP 501 with the missing capability; an unavailable selected connection returns HTTP 503. Requests are never silently replayed through another connection. Finish or abort active syncs before switching, editing or deleting their connection. Task/session IDs belong to the connection that created them; select that connection to manage them again.
+Discovery pins the Controller certificate. For another subnet, verify its fingerprint (printed by controller serve or shown in the GUI), then use:
 
-SSH output retains 1 MiB per stream and reports truncation. Timeout is at most 30 minutes. Cancellation closes the SSH channel; the executor monitors channel loss and kills the command's process group. Commands run with the remote user's full shell privileges, while file reads and working directories are confined to the authorized workspace and checked after resolving symbolic links.
+```text
+AgentRelay-worker setup --controller https://<controller-host>:8764 --fingerprint <sha256> --workspace <target-root> --name build-machine
+```
 
-## State And Management API
+Approve the matching verification number in the Controller GUI/terminal. Choose an existing device at approval to attach without changing identity. Worker roots may differ from SSH/other Worker roots. Every Worker connection gets an independent credential.
 
-Bridge state schema 2 stores independent `devices` and `connections` maps. Worker credentials require `connection_id`. Previous state formats are rejected; there is no migration, handle backfill or compatibility adapter. Use a fresh `AGENTRELAY_HOME` and pair/configure devices again.
+Worker defaults to local_sync. Use `--workspace-mode remote` at setup for an existing remote repository; Controller GUI can also change mode. Worker root changes require pairing again. An empty or target-relative directory permits execution immediately in either mode.
 
-Connection status resets to offline on Bridge restart. Workers reconnect automatically. Test SSH connections again after restart or a transport failure. Device revocation closes every Worker connection and rejects SSH execution and tests; device removal deletes all associated connection records. Removing one connection preserves the device and its other connections. Removing the selected connection clears its execution selection.
+```text
+AgentRelay exec --device build-machine --dir existing-repo --dir-kind remote "<native command>"
+AgentRelay sync --device build-machine --source <absolute-controller-source>
+AgentRelay exec --device build-machine --dir <absolute-controller-source> "<native command>"
+```
 
-All management endpoints are loopback-only and use the same origin protections as the existing UI:
+The latter commands use local_sync. `working_dir_kind=auto` maps absolute Controller paths only in that mode; remote mode treats absolute paths as target paths under the root. Explicit remote disambiguates absolute target paths in local_sync. File reads/pulls always refer to target paths. Remote-mode connections do not advertise sync, preventing accidental repository replacement.
 
-- `POST /v1/devices`: DeviceCreate with name, workspace and SSH configuration.
-- `POST /v1/devices/{device}/connections`: add SSHConfig to an existing device.
-- `PATCH /v1/devices/{device}/connections/{connection}`: replace SSHConfig.
-- `DELETE /v1/devices/{device}/connections/{connection}`: remove a connection.
-- `POST /v1/devices/{device}/connections/{connection}/test`: validate connectivity and probe capabilities.
-- `PATCH /v1/devices/{device}` with `active_connection`: choose the execution connection.
-- `POST /v1/pair-requests/{pairing}/approve` with optional `device_id`: attach Worker to an existing device.
+## Selection And Failure
 
-`GET /v1/devices` returns connection configuration for controller management. The MCP/CLI device listing returns only the device's selected capabilities and status.
+```text
+AgentRelay connection select --device <alias-or-handle> --id <connection-id>
+AgentRelay connection attach-worker --device <alias-or-handle> --id <pairing-id>
+AgentRelay connection remove --device <alias-or-handle> --id <connection-id>
+```
 
-For a real SSH regression test, set `AGENTRELAY_TEST_SSH` to DeviceCreate JSON pointing to an isolated disposable workspace and run `go test ./internal/bridge -run TestSSHIntegration -v`. This test executes commands and creates/removes its own test files under that workspace.
+Select transports explicitly. Unsupported capability returns 501; offline connection returns 503. No silent fallback, replay or identity merge. Finish/abort syncs before changing the selected connection. Task/session IDs belong to the originating connection. Revocation cancels requests on all adapters and closes all Worker connections. Removing a selected connection clears selection, preserving identity.
+
+## Controller API
+
+Management endpoints are local-only. `POST /v1/devices` accepts:
+
+```json
+{
+  "name": "linux-dev",
+  "connection": {
+    "kind": "ssh",
+    "ssh": {"host": "192.168.1.20", "port": 22, "user": "dev"},
+    "workspace": {"root": "/home/dev/repo", "mode": "remote"}
+  }
+}
+```
+
+- `POST /v1/devices/{device}/connections`: accepts the connection object above.
+- `PATCH /v1/devices/{device}/connections/{connection}`: replaces configuration/workspace policy. Kind is immutable; Worker root is pairing-authorized.
+- `DELETE /v1/devices/{device}/connections/{connection}`: removes a connection.
+- `POST /v1/devices/{device}/connections/{connection}/test`: invokes the adapter probe.
+- `PATCH /v1/devices/{device}`: updates identity, authorization, desktop permission or active_connection. Workspace policy belongs to the connection API.
+- `POST /v1/pair-requests/{pairing}/approve` with optional device_id: attaches Worker pairing.
+- `GET /v1/controller`: certificate fingerprint for verified manual pairing.
+
+local_sync policies may include `mappings`, from absolute Controller source paths to target-relative roots. Remote mode rejects mappings. Configuration revisions invalidate stale operations/probes. Controller state and Worker credentials require schema 3; there is no old-format compatibility or migration.
+
+For a real SSH test, set `AGENTRELAY_TEST_SSH` to the DeviceCreate JSON above with an isolated disposable root and run `go test ./internal/controller -run TestSSHIntegration -v`. The test creates/removes its own files there.

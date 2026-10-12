@@ -6,7 +6,7 @@ import (
 	"flag"
 	"strings"
 
-	"AgentRelay/internal/bridge"
+	"AgentRelay/internal/controller"
 	"AgentRelay/internal/filesync"
 	"AgentRelay/internal/protocol"
 )
@@ -21,7 +21,7 @@ func (p *syncPatterns) Set(value string) error {
 
 func syncCommand(args []string) error {
 	f := flag.NewFlagSet("sync", flag.ContinueOnError)
-	base := f.String("bridge", bridge.DefaultURL, "bridge URL")
+	base := f.String("controller", controller.DefaultURL, "controller URL")
 	id := f.String("device", "", "device ID")
 	source := f.String("source", ".", "local source directory")
 	remote := f.String("remote", "", "remote root (automatically mapped when omitted)")
@@ -39,7 +39,7 @@ func syncCommand(args []string) error {
 	if *mode != protocol.SyncModeUpdate && *mode != protocol.SyncModeMirror {
 		return errors.New("--mode must be update or mirror")
 	}
-	result, err := bridge.NewClient(*base).Sync(context.Background(), *id, filesync.Options{SourcePath: *source, Root: *remote, Mode: *mode, UseGitIgnore: !*noGitIgnore, Exclude: exclude, DryRun: *dryRun})
+	result, err := controller.NewClient(*base).Sync(context.Background(), *id, filesync.Options{SourcePath: *source, Root: *remote, Mode: *mode, UseGitIgnore: !*noGitIgnore, Exclude: exclude, DryRun: *dryRun})
 	if err != nil {
 		return err
 	}

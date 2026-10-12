@@ -5,7 +5,7 @@ English | [简体中文](README.zh-CN.md)
 AgentRelay gives a coding agent a secure, controlled connection to native execution environments on other computers. The agent stays on the controller and sees devices with explicit capabilities. Each device can select SSH or a native Worker as its execution connection.
 
 ```text
-Coding agent -- MCP stdio / CLI --> Bridge (controller, HTTPS)
+Coding agent -- MCP stdio / CLI --> Controller (HTTPS)
                                       | selected device connection
                         +-------------+-------------+
                         |                           |
@@ -18,32 +18,33 @@ The Worker opens no inbound port. LAN, Ethernet and future IP-over-USB connectio
 
 ## What You Need
 
-- A Windows controller running the coding agent. Windows PowerShell is the tested target.
+- A Windows, macOS or Linux controller running the coding agent and AgentRelay Controller.
 - A target computer with a workspace directory and either SSH + Python 3 (POSIX targets) or the native AgentRelay Worker.
 - Network reachability from the Worker to the controller. The controller accepts inbound TCP `8764`; discovery uses UDP `8763`.
-- macOS desktop access additionally needs Screen Recording and Accessibility permissions. POSIX shell support and macOS runtime support are experimental.
+- Worker targets run one native executable and need no Python, Node.js, LLM or Agent Runtime. macOS desktop access needs Screen Recording and Accessibility permissions; Linux desktop is currently unsupported.
 
 ## Quick Start
 
-Build the two executables from the repository, or use the matching binaries in a release:
+Build the Controller/MCP programs on the controller and the standalone Worker for its target, or use release binaries:
 
 ```powershell
 go build -o AgentRelay.exe ./cmd/AgentRelay
 go build -ldflags "-H=windowsgui" -o AgentRelay-mcp.exe ./cmd/AgentRelay-mcp
+go build -o AgentRelay-worker.exe ./cmd/AgentRelay-worker
 ```
 
-1. On the controller, run `AgentRelay gui` to start the Bridge, enable LAN discovery, and open the device management UI. `AgentRelay setup` with `controller` remains available for terminal-only operation.
-2. On the target computer, run `AgentRelay setup` and choose `worker`. Select the discovered controller, choose a workspace folder and set a device alias.
-3. Compare the verification number shown on both computers, then approve the request in the controller terminal. The Worker saves its credentials and reconnects automatically.
-4. On later starts, use `AgentRelay bridge serve` on the controller and `AgentRelay worker serve` on the target. `start-bridge.bat` and `start-worker.bat` are Windows shortcuts.
+1. On the controller, run `AgentRelay gui` (or `AgentRelay setup`) to open device management. For terminal operation use `AgentRelay controller serve`.
+2. On the target, run `AgentRelay-worker setup`. Choose a discovered Controller, a workspace folder and an alias.
+3. Compare verification numbers and approve in the Controller GUI/terminal. Worker saves its credentials.
+4. Later, run `AgentRelay-worker serve`. Windows shortcuts are `start-controller.bat` and `start-worker.bat`.
 
-Pairing requests expire after five minutes. A device and credentials are created only after approval. Pairing must use a discovered controller so the Worker can pin its certificate fingerprint; an unverified manual URL is rejected.
+Pairing requests expire after five minutes. Devices/credentials are created only after approval. For another subnet, specify `--controller`, a verified `--fingerprint`, `--workspace` and `--name` when running Worker setup. Unpinned URLs are rejected. Use `scripts/build.ps1` or `sh scripts/build.sh` for Windows/macOS/Linux amd64 and arm64 binaries; macOS/Linux names have no `.exe`, and the Windows-only MCP linker flag is omitted there.
 
 ## Connect Your Agent
 
-For deployment without a Worker, use **添加 SSH 连接** in the GUI, then **测试**. SSH v1 provides command execution and workspace file reads. A device can retain both SSH and Worker connections while appearing once to the agent. See [Devices and connections](docs/connections.md) for setup, supported capabilities and connection selection. This refactor requires fresh schema-2 state; old state is rejected without migration.
+For deployment without a Worker, use **添加 SSH 连接** in the GUI, then **测试**. SSH provides execution and file reads, defaulting to the remote repository as source. A device may have both SSH and Worker connections with independent roots/policies and appears once to the agent. See [connections](docs/connections.md). Controller state and Worker credentials require schema 3; use fresh state and configure/pair again. Old data, commands and flags have no compatibility aliases.
 
-Run this on the controller, as the same user that runs the Bridge:
+Run this on the controller, as the same user that runs the Controller:
 
 ```powershell
 AgentRelay mcp config
@@ -70,6 +71,8 @@ AgentRelay pull --device build-machine --out .\results <remote-root>\report.txt
 
 `device_list` exposes a persistent short handle generated at pairing time (for example `dev-a1b2c3d4`), aliases, status and capabilities, without exposing private device IDs. The required `device_id` argument accepts either a handle or an alias. Disconnects, reconnects, and adding or removing devices do not change the handle.
 
+Each selected connection exposes `workspace_mode`: Worker defaults to `local_sync` (local source mappings); SSH defaults to `remote` (target repository). Both modes permit execution without synchronization. In remote mode, run `AgentRelay exec --device linux-dev --dir /home/dev/repo "pwd"` directly. `--dir-kind local|remote|auto` (MCP `working_dir_kind`) resolves path ambiguity. Remote mode disables sync to protect its source repository. Policies and mappings belong to each connection and can be edited in the GUI.
+
 Use sessions for long-lived shell processes:
 
 ```powershell
@@ -79,7 +82,7 @@ AgentRelay session get --device <id> --id <session-id>
 AgentRelay session close --device <id> --id <session-id>
 ```
 
-Remote paths are relative to the Worker's authorized workspace. `sync` compares SHA-256 manifests and uploads changed files in bounded chunks, so directories and individual files are not limited by the 32 MiB RPC payload cap. It applies nested `.gitignore` files and a root `.agentrelayignore` by default; repeat `--exclude` for additional gitignore-compatible patterns or use `--no-gitignore`. `--mode update` keeps remote extras, while `--mode mirror` removes only files managed by an earlier sync and now absent locally. `--dry-run` reports the plan without changing the Worker. A successful sync persists the local-project-to-remote-root mapping, so later commands can use the same local project directory. Tasks and sessions are in memory and are not reconstructed after a Worker process restart.
+Remote paths are checked against the selected connection's authorized root; absolute target paths are normalized to relative paths before execution. `sync` compares SHA-256 manifests and uploads changed files in bounded chunks, so directories and individual files are not limited by the 32 MiB RPC payload cap. It applies nested `.gitignore` files and a root `.agentrelayignore` by default; repeat `--exclude` for additional gitignore-compatible patterns or use `--no-gitignore`. `--mode update` keeps remote extras, while `--mode mirror` removes only files managed by an earlier sync and now absent locally. `--dry-run` reports the plan without changing the Worker. A successful sync persists the local-project-to-remote-root mapping, so later commands can use the same local project directory. Tasks and sessions are in memory and are not reconstructed after a Worker process restart.
 
 Manage authorization without pairing again:
 

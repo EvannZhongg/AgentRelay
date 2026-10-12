@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	"AgentRelay/internal/bridge"
+	"AgentRelay/internal/controller"
 	"AgentRelay/internal/filesync"
 	"AgentRelay/internal/protocol"
 )
@@ -44,16 +44,16 @@ const (
 )
 
 func main() {
-	base := flag.String("bridge", bridge.DefaultURL, "Bridge URL")
+	base := flag.String("controller", controller.DefaultURL, "Controller URL")
 	flag.Parse()
-	client := bridge.NewClient(*base)
+	client := controller.NewClient(*base)
 	if err := serve(client, os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func serve(client *bridge.Client, input io.Reader, output io.Writer) error {
+func serve(client *controller.Client, input io.Reader, output io.Writer) error {
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 64<<10), 64<<20)
 	encoder := json.NewEncoder(output)
@@ -110,7 +110,7 @@ func validID(id json.RawMessage) bool {
 	}
 }
 
-func handle(ctx context.Context, client *bridge.Client, req rpcRequest) (any, error) {
+func handle(ctx context.Context, client *controller.Client, req rpcRequest) (any, error) {
 	switch req.Method {
 	case "initialize":
 		return initializeResult(req.Params), nil
@@ -152,11 +152,11 @@ func toolDefinitions() []map[string]any {
 		return map[string]any{"type": "string", "description": description}
 	}
 	return append([]map[string]any{
-		{"name": "device_list", "description": "List logical devices using persistent handles and aliases, authorization, workspace mappings, capabilities and availability. Each device appears once. Check advertised capabilities before requesting an operation. Private IDs and connection configuration are omitted; offline entries remain visible.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
+		{"name": "device_list", "description": "List logical devices using persistent handles and aliases, authorization, selected workspace_mode (local_sync or remote), workspace mappings, capabilities and availability. Each device appears once. Check advertised capabilities before requesting an operation. Private IDs and connection configuration are omitted; offline entries remain visible.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
 		{"name": "device_exec", "description": "Execute a command on a device selected by a persistent handle or alias and return stdout, stderr and exit status.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false,
 			"properties": map[string]any{
-				"device_id": stringProperty("Persistent device handle or alias. Do not use the private device ID."), "command": stringProperty("Native shell command."), "working_dir": stringProperty("Mapped local project directory or workspace-relative remote directory."),
+				"device_id": stringProperty("Persistent device handle or alias. Do not use the private device ID."), "command": stringProperty("Native shell command."), "working_dir_kind": map[string]any{"type": "string", "enum": []string{"auto", "local", "remote"}, "description": "auto follows workspace_mode; local requires a sync mapping; remote always uses the target filesystem."}, "working_dir": stringProperty("In local_sync mode: a mapped controller directory or target-relative directory. In remote mode: a target-relative or absolute directory inside the authorized root. Sync is optional."),
 				"env": map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")}, "timeout_ms": map[string]any{"type": "integer", "minimum": 1, "description": "Execution timeout in milliseconds."},
 			}, "required": []string{"device_id", "command"},
 		}},
@@ -174,14 +174,14 @@ func toolDefinitions() []map[string]any {
 		}},
 		{"name": "device_task", "description": "Start, list, query or cancel a task. get retains the record; retrieve returns a finished task and deletes its record, and fails while the task is running.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false, "properties": map[string]any{
-				"action": map[string]any{"type": "string", "enum": []string{"start", "list", "get", "cancel", "retrieve"}}, "device_id": stringProperty("Persistent device handle or alias."), "task_id": stringProperty("Task ID for get, cancel, or retrieve."), "command": stringProperty("Command for start."), "working_dir": stringProperty("Mapped local project directory or workspace-relative directory."), "env": map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")}, "timeout_ms": map[string]any{"type": "integer", "minimum": 1},
+				"action": map[string]any{"type": "string", "enum": []string{"start", "list", "get", "cancel", "retrieve"}}, "device_id": stringProperty("Persistent device handle or alias."), "task_id": stringProperty("Task ID for get, cancel, or retrieve."), "command": stringProperty("Command for start."), "working_dir_kind": map[string]any{"type": "string", "enum": []string{"auto", "local", "remote"}, "description": "auto follows workspace_mode; local requires a sync mapping; remote always uses the target filesystem."}, "working_dir": stringProperty("Directory interpreted according to workspace_mode and working_dir_kind."), "env": map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")}, "timeout_ms": map[string]any{"type": "integer", "minimum": 1},
 			}, "required": []string{"device_id", "action"},
 		}},
 		{"name": "device_session", "description": "Create, list, poll, send input to, or close a persistent shell session. Output is cumulative; send returns immediately, so poll get for new output. This is a pipe-based shell, not a PTY.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false, "properties": map[string]any{
 				"action":    map[string]any{"type": "string", "enum": []string{"create", "list", "get", "send", "close"}},
 				"device_id": stringProperty("Persistent device handle or alias."), "session_id": stringProperty("Session ID for get, send, or close."),
-				"command": stringProperty("Optional initial shell command for create."), "working_dir": stringProperty("Mapped local project or workspace-relative directory for create."),
+				"command": stringProperty("Optional initial shell command for create."), "working_dir_kind": map[string]any{"type": "string", "enum": []string{"auto", "local", "remote"}, "description": "auto follows workspace_mode; local requires a sync mapping; remote always uses the target filesystem."}, "working_dir": stringProperty("Directory interpreted according to workspace_mode and working_dir_kind for create."),
 				"env":   map[string]any{"type": "object", "additionalProperties": stringProperty("Environment variable value.")},
 				"input": stringProperty("Exact stdin text for send. Include a newline to execute a shell command; multiline PowerShell blocks need a final blank line."),
 			}, "required": []string{"device_id", "action"},
@@ -189,7 +189,7 @@ func toolDefinitions() []map[string]any {
 	}, desktopToolDefinitions()...)
 }
 
-func callTool(ctx context.Context, client *bridge.Client, raw json.RawMessage) (any, error) {
+func callTool(ctx context.Context, client *controller.Client, raw json.RawMessage) (any, error) {
 	var call struct {
 		Name      string         `json:"name"`
 		Arguments map[string]any `json:"arguments"`
@@ -228,7 +228,7 @@ func callTool(ctx context.Context, client *bridge.Client, raw json.RawMessage) (
 		if err != nil {
 			return nil, err
 		}
-		req := protocol.ExecRequest{Command: command, WorkingDir: optionalString(call.Arguments, "working_dir"), Env: stringMap(call.Arguments["env"])}
+		req := protocol.ExecRequest{Command: command, WorkingDir: optionalString(call.Arguments, "working_dir"), WorkingDirKind: optionalString(call.Arguments, "working_dir_kind"), Env: stringMap(call.Arguments["env"])}
 		req.TimeoutMS, err = optionalInt64(call.Arguments, "timeout_ms")
 		if err != nil {
 			return nil, err
@@ -288,7 +288,7 @@ func callTool(ctx context.Context, client *bridge.Client, raw json.RawMessage) (
 	}
 }
 
-func callTask(ctx context.Context, client *bridge.Client, args map[string]any) (any, error) {
+func callTask(ctx context.Context, client *controller.Client, args map[string]any) (any, error) {
 	id, err := requiredString(args, "device_id")
 	if err != nil {
 		return nil, err
@@ -307,7 +307,7 @@ func callTask(ctx context.Context, client *bridge.Client, args map[string]any) (
 		if timeoutErr != nil {
 			return nil, timeoutErr
 		}
-		task, taskErr := client.StartTask(ctx, id, protocol.TaskRequest{ExecRequest: protocol.ExecRequest{Command: command, WorkingDir: optionalString(args, "working_dir"), Env: stringMap(args["env"]), TimeoutMS: timeout}})
+		task, taskErr := client.StartTask(ctx, id, protocol.TaskRequest{ExecRequest: protocol.ExecRequest{Command: command, WorkingDir: optionalString(args, "working_dir"), WorkingDirKind: optionalString(args, "working_dir_kind"), Env: stringMap(args["env"]), TimeoutMS: timeout}})
 		return toolJSON(task), taskErr
 	case "list":
 		tasks, listErr := client.ListTasks(ctx, id)
@@ -340,7 +340,7 @@ func callTask(ctx context.Context, client *bridge.Client, args map[string]any) (
 	}
 }
 
-func callSession(ctx context.Context, client *bridge.Client, args map[string]any) (any, error) {
+func callSession(ctx context.Context, client *controller.Client, args map[string]any) (any, error) {
 	id, err := requiredString(args, "device_id")
 	if err != nil {
 		return nil, err
@@ -351,7 +351,7 @@ func callSession(ctx context.Context, client *bridge.Client, args map[string]any
 	}
 	switch action {
 	case "create":
-		result, err := client.CreateSession(ctx, id, protocol.SessionRequest{Command: optionalString(args, "command"), WorkingDir: optionalString(args, "working_dir"), Env: stringMap(args["env"])})
+		result, err := client.CreateSession(ctx, id, protocol.SessionRequest{Command: optionalString(args, "command"), WorkingDir: optionalString(args, "working_dir"), WorkingDirKind: optionalString(args, "working_dir_kind"), Env: stringMap(args["env"])})
 		return toolJSON(result), err
 	case "list":
 		result, err := client.ListSessions(ctx, id)
@@ -454,7 +454,7 @@ func toolJSON(value any) map[string]any {
 }
 
 func agentDeviceList(devices []protocol.Device) []map[string]any {
-	devices = bridge.SortDevices(devices)
+	devices = controller.SortDevices(devices)
 	out := make([]map[string]any, 0, len(devices))
 	for _, device := range devices {
 		selector := device.Handle
@@ -472,6 +472,7 @@ func agentDeviceList(devices []protocol.Device) []map[string]any {
 			"os_version":         device.OSVersion,
 			"architecture":       device.Architecture,
 			"workspace":          device.Workspace,
+			"workspace_mode":     device.WorkspaceMode,
 			"workspace_mappings": device.Mappings,
 			"capabilities":       device.Capabilities,
 			"last_seen":          device.LastSeen,

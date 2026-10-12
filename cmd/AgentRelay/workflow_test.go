@@ -1,6 +1,7 @@
 package main
 
 import (
+	"AgentRelay/internal/testshell"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -12,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"AgentRelay/internal/bridge"
+	"AgentRelay/internal/controller"
 	"AgentRelay/internal/protocol"
 	"AgentRelay/internal/testutil"
 )
@@ -33,11 +34,11 @@ func captureCommand(t *testing.T, command func([]string) error, args []string) (
 	return <-output, err
 }
 
-func cliFixture(t *testing.T) ([]string, *bridge.Client, string, string) {
+func cliFixture(t *testing.T) ([]string, *controller.Client, string, string) {
 	t.Helper()
 	root := t.TempDir()
 	relay := testutil.New(t, root)
-	return []string{"--bridge", relay.HTTP.URL, "--device", relay.Device.ID}, relay.Client, relay.Device.ID, root
+	return []string{"--controller", relay.HTTP.URL, "--device", relay.Device.ID}, relay.Client, relay.Device.ID, root
 }
 
 func TestCLITaskWorkflow(t *testing.T) {
@@ -68,7 +69,7 @@ func TestCLITaskWorkflow(t *testing.T) {
 		}
 	}
 	var task protocol.Task
-	call("start", &task, "--dir", "project", "--env", "AR_CLI_TEST=first", "--env", "AR_CLI_TEST=value=ok", "--timeout-ms", "5000", "Write-Output $env:AR_CLI_TEST; (Get-Location).Path")
+	call("start", &task, "--dir", "project", "--env", "AR_CLI_TEST=first", "--env", "AR_CLI_TEST=value=ok", "--timeout-ms", "5000", testshell.Native("Write-Output $env:AR_CLI_TEST; (Get-Location).Path", "printf '%s\\n' \"$AR_CLI_TEST\"; pwd"))
 	t.Cleanup(func() { _ = c.CancelTask(context.Background(), device, task.ID) })
 	wait(&task)
 	if task.Status != "completed" || task.Result == nil || !strings.Contains(task.Result.Stdout, "value=ok") || !strings.Contains(task.Result.Stdout, filepath.Join(root, "project")) {
@@ -96,7 +97,7 @@ func TestCLITaskWorkflow(t *testing.T) {
 		errorText string
 	}{
 		{"exit 7", "5000", "command exited with code 7"},
-		{"Start-Sleep -Seconds 30", "100", "execution timed out"},
+		{testshell.Native("Start-Sleep -Seconds 30", "sleep 30"), "100", "execution timed out"},
 	} {
 		task = protocol.Task{}
 		call("start", &task, "--timeout-ms", tc.timeout, tc.command)
@@ -107,7 +108,7 @@ func TestCLITaskWorkflow(t *testing.T) {
 		call("retrieve", &task, "--id", task.ID)
 	}
 	task = protocol.Task{}
-	call("start", &task, "Start-Sleep -Seconds 30")
+	call("start", &task, testshell.Native("Start-Sleep -Seconds 30", "sleep 30"))
 	call("cancel", &task, "--id", task.ID)
 	if task.Status != "cancelled" {
 		t.Fatalf("cancel = %+v", task)
@@ -165,16 +166,16 @@ func TestCLISessionAndPull(t *testing.T) {
 	}
 	var session protocol.Session
 	args := append([]string{"create"}, common...)
-	call(sessionCommand, append(args, "--dir", "project", "--env", "AR_CLI_SESSION=env-ok", "$relay = 'retained'"), &session)
+	call(sessionCommand, append(args, "--dir", "project", "--env", "AR_CLI_SESSION=env-ok", testshell.Native("$relay = 'retained'", "relay='retained'")), &session)
 	t.Cleanup(func() { _, _ = c.CloseSession(context.Background(), device, session.ID) })
 	inputFile := filepath.Join(t.TempDir(), "input.txt")
-	if err := os.WriteFile(inputFile, []byte("Write-Output ($relay + ':' + $env:AR_CLI_SESSION); (Get-Location).Path\r\n"), 0600); err != nil {
+	if err := os.WriteFile(inputFile, []byte(testshell.Native("Write-Output ($relay + ':' + $env:AR_CLI_SESSION); (Get-Location).Path\r\n", "printf '%s\\n' \"$relay:$AR_CLI_SESSION\"; pwd\n")), 0600); err != nil {
 		t.Fatal(err)
 	}
 	args = append([]string{"send"}, common...)
 	call(sessionCommand, append(args, "--id", session.ID, "--input-file", inputFile), &session)
 	args = append([]string{"send"}, common...)
-	call(sessionCommand, append(args, "--id", session.ID, "--input", "Write-Output 'direct-input'\r\n"), &session)
+	call(sessionCommand, append(args, "--id", session.ID, "--input", testshell.Native("Write-Output 'direct-input'\r\n", "printf '%s\\n' 'direct-input'\n")), &session)
 	deadline := time.Now().Add(10 * time.Second)
 	for !strings.Contains(session.Stdout, "direct-input") && time.Now().Before(deadline) {
 		time.Sleep(25 * time.Millisecond)

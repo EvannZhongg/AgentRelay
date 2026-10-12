@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"AgentRelay/internal/bridge"
+	"AgentRelay/internal/controller"
 	"AgentRelay/internal/desktop"
 	"AgentRelay/internal/protocol"
 	"AgentRelay/internal/state"
@@ -15,9 +15,9 @@ import (
 )
 
 type Relay struct {
-	Bridge      *bridge.Server
+	Controller  *controller.Server
 	HTTP        *httptest.Server
-	Client      *bridge.Client
+	Client      *controller.Client
 	Worker      *worker.Server
 	Peer        *transport.Peer
 	Device      protocol.Device
@@ -35,8 +35,8 @@ func NewWithDesktop(t *testing.T, root string, backend desktop.Backend) *Relay {
 		root = t.TempDir()
 	}
 	t.Setenv("AGENTRELAY_HOME", t.TempDir())
-	statePath := state.Path("bridge")
-	b, err := bridge.New(bridge.Config{StatePath: statePath})
+	statePath := state.Path("controller")
+	b, err := controller.New(controller.Config{StatePath: statePath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func NewWithDesktop(t *testing.T, root string, backend desktop.Backend) *Relay {
 		}{creds, err}
 	}()
 	request := <-requestCh
-	if _, err := bridge.NewClient(httpServer.URL).DecidePairing(context.Background(), request.ID, true); err != nil {
+	if _, err := controller.NewClient(httpServer.URL).DecidePairing(context.Background(), request.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	result := <-credsCh
@@ -81,14 +81,14 @@ func NewWithDesktop(t *testing.T, root string, backend desktop.Backend) *Relay {
 		t.Fatal(err)
 	}
 	t.Cleanup(peer.Close)
-	client := bridge.NewClient(httpServer.URL)
+	client := controller.NewClient(httpServer.URL)
 	devices, err := client.Devices(context.Background())
 	if err != nil || len(devices) != 1 {
 		t.Fatalf("devices: %+v, %v", devices, err)
 	}
-	return &Relay{Bridge: b, HTTP: httpServer, Client: client, Worker: w, Peer: peer, Device: devices[0], Credentials: creds, StatePath: statePath}
+	return &Relay{Controller: b, HTTP: httpServer, Client: client, Worker: w, Peer: peer, Device: devices[0], Credentials: creds, StatePath: statePath}
 }
-func WaitOffline(t *testing.T, c *bridge.Client, id string) {
+func WaitOffline(t *testing.T, c *controller.Client, id string) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {

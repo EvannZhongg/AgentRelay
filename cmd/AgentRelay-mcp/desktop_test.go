@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"AgentRelay/internal/bridge"
+	"AgentRelay/internal/controller"
 	"AgentRelay/internal/protocol"
 	"AgentRelay/internal/testutil"
 )
@@ -99,7 +99,7 @@ func TestMCPDesktopImageArtifactAndInput(t *testing.T) {
 		t.Fatalf("input trimmed: %q", f.last.Text)
 	}
 	no := false
-	if _, err = relay.Client.UpdateDevice(context.Background(), relay.Device.ID, bridge.DeviceUpdate{Authorized: &no}); err != nil {
+	if _, err = relay.Client.UpdateDevice(context.Background(), relay.Device.ID, controller.DeviceUpdate{Authorized: &no}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = relay.Client.Capture(context.Background(), relay.Device.ID, protocol.CaptureRequest{}); err == nil {

@@ -1,6 +1,6 @@
 # Desktop Access
 
-Desktop access follows the existing request path: `MCP/CLI -> Bridge HTTPS -> authenticated WSS -> Worker desktop handler -> native OS API`. It uses the existing pairing, certificate, credential and authorization checks. The Worker must run in a logged-in interactive session.
+Desktop access follows the existing request path: `MCP/CLI -> Controller HTTPS -> authenticated WSS -> Worker desktop handler -> native OS API`. It uses the existing pairing, certificate, credential and authorization checks. The Worker must run in a logged-in interactive session.
 
 ## Modules
 
@@ -11,11 +11,11 @@ Desktop access follows the existing request path: `MCP/CLI -> Bridge HTTPS -> au
 | `internal/desktop/native_windows.go` | Win32 display enumeration, GDI capture and SendInput |
 | `internal/desktop/native_darwin.go` | CoreGraphics metadata/input and system `screencapture` |
 | `internal/desktop/unsupported.go` | Explicit unsupported-platform response |
-| `internal/bridge/desktop.go` | PNG validation, original artifact storage and preview scaling |
+| `internal/controller/desktop.go` | PNG validation, original artifact storage and preview scaling |
 | `cmd/AgentRelay-mcp/desktop.go` | MCP tool schemas and image content |
 | `cmd/AgentRelay/desktop.go` | CLI commands |
 
-The platform backend implements `Info`, `Capture` and `Input` without depending on MCP, Bridge or WebSocket packages. The implementation does not depend on RobotGo and builds without CGO.
+The platform backend implements `Info`, `Capture` and `Input` without depending on MCP, Controller or WebSocket packages. The implementation does not depend on RobotGo and builds without CGO.
 
 ## Tools And Endpoints
 
@@ -27,7 +27,7 @@ The controller endpoints are `GET /v1/devices/{id}/desktop`, `POST /v1/devices/{
 
 ## Captures And Artifacts
 
-The Worker encodes the full PNG and returns it through the existing RPC. The Bridge preserves the original under its state directory at `artifacts/captures/capture-*.png` and returns metadata similar to:
+The Worker encodes the full PNG and returns it through the existing RPC. The Controller preserves the original under its state directory at `artifacts/captures/capture-*.png` and returns metadata similar to:
 
 ~~~json
 {
@@ -73,4 +73,4 @@ Input is serialized in the Worker. Cancellation cannot undo an OS event that alr
 
 Windows requires an unlocked interactive desktop. Secure desktops, elevated prompts and higher-integrity applications may reject input. macOS requires Screen Recording and Accessibility permissions for the Worker process or its launch host. `device_desktop` reports the current permission state.
 
-After updating Bridge, Worker and the MCP executable, reconnect the MCP client to refresh tool definitions. Validate Windows capture/input on a connected device; macOS arm64/amd64 builds are supported, but runtime permission, Retina and multi-display validation is still required.
+After updating Controller, Worker and the MCP executable, reconnect the MCP client to refresh tool definitions. Validate Windows capture/input on a connected device; macOS arm64/amd64 builds are supported, but runtime permission, Retina and multi-display validation is still required.

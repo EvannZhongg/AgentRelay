@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"AgentRelay/internal/testshell"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -26,7 +27,8 @@ func TestWorkerExecSyncAndPathBoundary(t *testing.T) {
 	server := httptest.NewServer(s.Handler())
 	defer server.Close()
 
-	resp, err := http.Post(server.URL+"/v1/exec", "application/json", strings.NewReader(`{"command":"Write-Output AgentRelay-ok"}`))
+	execBody, _ := json.Marshal(protocol.ExecRequest{Command: testshell.Native("Write-Output AgentRelay-ok", "printf AgentRelay-ok")})
+	resp, err := http.Post(server.URL+"/v1/exec", "application/json", bytes.NewReader(execBody))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +153,7 @@ func TestWorkerSessionLifecycle(t *testing.T) {
 	if session.ID == "" || session.Status != "running" {
 		t.Fatalf("session = %+v", session)
 	}
-	input := protocol.SessionInput{Input: "Write-Output AgentRelay-session-ok\r\n"}
+	input := protocol.SessionInput{Input: testshell.Native("Write-Output AgentRelay-session-ok\r\n", "printf '%s\\n' AgentRelay-session-ok\n")}
 	data, _ := json.Marshal(input)
 	resp, err := client.Post(server.URL+"/v1/sessions/"+session.ID+"/input", "application/json", strings.NewReader(string(data)))
 	if err != nil {

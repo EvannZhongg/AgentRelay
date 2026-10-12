@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"AgentRelay/internal/bridge"
+	"AgentRelay/internal/controller"
 	"AgentRelay/internal/protocol"
 )
 
@@ -32,7 +32,7 @@ func desktopToolDefinitions() []map[string]any {
 	}
 }
 
-func callDesktop(ctx context.Context, c *bridge.Client, name string, args map[string]any) (any, error) {
+func callDesktop(ctx context.Context, c *controller.Client, name string, args map[string]any) (any, error) {
 	id, err := requiredString(args, "device_id")
 	if err != nil {
 		return nil, err

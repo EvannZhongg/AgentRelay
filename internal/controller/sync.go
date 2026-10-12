@@ -1,6 +1,8 @@
-package bridge
+package controller
 
 import (
+	"AgentRelay/internal/filesync"
+	"AgentRelay/internal/protocol"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,9 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	"AgentRelay/internal/filesync"
-	"AgentRelay/internal/protocol"
 )
 
 const manifestBatchSize = 512

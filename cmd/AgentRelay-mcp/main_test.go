@@ -1,6 +1,7 @@
 package main
 
 import (
+	"AgentRelay/internal/testshell"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -11,14 +12,14 @@ import (
 	"testing"
 	"time"
 
-	"AgentRelay/internal/bridge"
+	"AgentRelay/internal/controller"
 	"AgentRelay/internal/protocol"
 	"AgentRelay/internal/testutil"
 )
 
 func TestMCPInitializeNegotiatesSupportedVersion(t *testing.T) {
 	params, _ := json.Marshal(map[string]string{"protocolVersion": "2025-03-26"})
-	result, err := handle(context.Background(), bridge.NewClient("http://127.0.0.1:1"), rpcRequest{Method: "initialize", Params: params})
+	result, err := handle(context.Background(), controller.NewClient("http://127.0.0.1:1"), rpcRequest{Method: "initialize", Params: params})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +37,7 @@ func TestMCPStdioFramingAndErrors(t *testing.T) {
 		`{"jsonrpc":"1.0","id":1,"method":"ping"}` + "\n" +
 		`[]` + "\n")
 	var output bytes.Buffer
-	if err := serve(bridge.NewClient("http://127.0.0.1:1"), input, &output); err != nil {
+	if err := serve(controller.NewClient("http://127.0.0.1:1"), input, &output); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
@@ -94,7 +95,7 @@ func TestMCPDevelopmentWorkflow(t *testing.T) {
 	}
 	call("device_sync", map[string]any{"source_path": source, "root": "project"}, nil)
 	var task protocol.Task
-	call("device_task", map[string]any{"action": "start", "working_dir": "project", "command": "Get-Content input.txt | Set-Content report.txt; Write-Output $env:AR_TASK_TEST", "env": map[string]string{"AR_TASK_TEST": "task-env-ok"}, "timeout_ms": 5000}, &task)
+	call("device_task", map[string]any{"action": "start", "working_dir": "project", "command": testshell.Native("Get-Content input.txt | Set-Content report.txt; Write-Output $env:AR_TASK_TEST", "cp input.txt report.txt; printf '%s\\n' \"$AR_TASK_TEST\""), "env": map[string]string{"AR_TASK_TEST": "task-env-ok"}, "timeout_ms": 5000}, &task)
 	deadline := time.Now().Add(5 * time.Second)
 	for task.FinishedAt == nil && time.Now().Before(deadline) {
 		time.Sleep(25 * time.Millisecond)
@@ -129,7 +130,7 @@ func TestMCPDevelopmentWorkflow(t *testing.T) {
 		t.Fatalf("pulled = %q, error = %v", data, err)
 	}
 	task = protocol.Task{}
-	call("device_task", map[string]any{"action": "start", "command": "Start-Sleep -Seconds 30"}, &task)
+	call("device_task", map[string]any{"action": "start", "command": testshell.Native("Start-Sleep -Seconds 30", "sleep 30")}, &task)
 	call("device_task", map[string]any{"action": "cancel", "task_id": task.ID}, &task)
 	if task.Status != "cancelled" {
 		t.Fatalf("cancel = %+v", task)
@@ -143,18 +144,18 @@ func TestMCPDevelopmentWorkflow(t *testing.T) {
 		t.Fatal("cancelled process was not reaped")
 	}
 	var execution protocol.ExecResponse
-	call("device_exec", map[string]any{"command": "Write-Output '\u4e2d\u6587'"}, &execution)
+	call("device_exec", map[string]any{"command": testshell.Native("Write-Output '\u4e2d\u6587'", "printf '%s\\n' '中文'")}, &execution)
 	if strings.TrimSpace(execution.Stdout) != "\u4e2d\u6587" {
 		t.Fatalf("UTF-8 stdout = %q", execution.Stdout)
 	}
-	call("device_exec", map[string]any{"command": "Start-Sleep -Seconds 30", "timeout_ms": 100}, &execution)
+	call("device_exec", map[string]any{"command": testshell.Native("Start-Sleep -Seconds 30", "sleep 30"), "timeout_ms": 100}, &execution)
 	if !execution.TimedOut {
 		t.Fatalf("timeout = %+v", execution)
 	}
 	var session protocol.Session
-	call("device_session", map[string]any{"action": "create", "working_dir": "project", "command": "$relayValue = 'preserved'", "env": map[string]string{"AR_SESSION_TEST": "session-env-ok"}}, &session)
+	call("device_session", map[string]any{"action": "create", "working_dir": "project", "command": testshell.Native("$relayValue = 'preserved'", "relayValue='preserved'"), "env": map[string]string{"AR_SESSION_TEST": "session-env-ok"}}, &session)
 	defer func() { _, _ = client.CloseSession(ctx, device.ID, session.ID) }()
-	call("device_session", map[string]any{"action": "send", "session_id": session.ID, "input": "Write-Output ($relayValue + ':' + $env:AR_SESSION_TEST); Write-Output '\u4e2d\u6587'; Get-Content input.txt\r\n"}, &session)
+	call("device_session", map[string]any{"action": "send", "session_id": session.ID, "input": testshell.Native("Write-Output ($relayValue + ':' + $env:AR_SESSION_TEST); Write-Output '\u4e2d\u6587'; Get-Content input.txt\r\n", "printf '%s\\n' \"$relayValue:$AR_SESSION_TEST\"; printf '%s\\n' '中文'; cat input.txt\n")}, &session)
 	deadline = time.Now().Add(5 * time.Second)
 	for !strings.Contains(session.Stdout, "workflow-payload") && time.Now().Before(deadline) {
 		time.Sleep(25 * time.Millisecond)
@@ -181,7 +182,7 @@ func TestMCPDevelopmentWorkflow(t *testing.T) {
 }
 
 func TestMCPInvalidToolArguments(t *testing.T) {
-	client := bridge.NewClient("http://127.0.0.1:1")
+	client := controller.NewClient("http://127.0.0.1:1")
 	for _, arguments := range []string{
 		`{"device_id":"test","command":"echo test","env":{"X":42}}`,
 		`{"device_id":"test","command":"echo test","timeout_ms":9223372036854775807}`,
@@ -195,7 +196,7 @@ func TestMCPInvalidToolArguments(t *testing.T) {
 }
 
 func TestMCPPing(t *testing.T) {
-	result, err := handle(context.Background(), bridge.NewClient("http://127.0.0.1:1"), rpcRequest{Method: "ping"})
+	result, err := handle(context.Background(), controller.NewClient("http://127.0.0.1:1"), rpcRequest{Method: "ping"})
 	if err != nil || result == nil {
 		t.Fatalf("ping result = %#v, error = %v", result, err)
 	}
@@ -225,7 +226,7 @@ func TestMCPToolDefinitionsExposeDeviceCapabilities(t *testing.T) {
 func TestMCPDeviceExecPassesEnvAndTimeout(t *testing.T) {
 	relay := testutil.New(t, "")
 	client, device := relay.Client, relay.Device
-	params, _ := json.Marshal(map[string]any{"name": "device_exec", "arguments": map[string]any{"device_id": device.ID, "command": "Write-Output $env:AR_MCP_TEST", "env": map[string]string{"AR_MCP_TEST": "passed"}, "timeout_ms": 5000}})
+	params, _ := json.Marshal(map[string]any{"name": "device_exec", "arguments": map[string]any{"device_id": device.ID, "command": testshell.Native("Write-Output $env:AR_MCP_TEST", "printf '%s\\n' \"$AR_MCP_TEST\""), "env": map[string]string{"AR_MCP_TEST": "passed"}, "timeout_ms": 5000}})
 	result, err := callTool(context.Background(), client, params)
 	if err != nil {
 		t.Fatal(err)

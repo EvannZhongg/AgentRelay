@@ -1,9 +1,8 @@
-package bridge
+package controller
 
 import (
-	"testing"
-
 	"AgentRelay/internal/protocol"
+	"testing"
 )
 
 func TestResolveDeviceSelector(t *testing.T) {

@@ -1,6 +1,10 @@
-package bridge_test
+package controller_test
 
 import (
+	"AgentRelay/internal/filesync"
+	"AgentRelay/internal/protocol"
+	"AgentRelay/internal/testshell"
+	"AgentRelay/internal/testutil"
 	"context"
 	"encoding/base64"
 	"os"
@@ -8,13 +12,9 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"AgentRelay/internal/filesync"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/testutil"
 )
 
-func TestBridgePairsAndCallsOutboundWorker(t *testing.T) {
+func TestControllerPairsAndCallsOutboundWorker(t *testing.T) {
 	relay := testutil.New(t, "")
 	client, device := relay.Client, relay.Device
 	if device.ID == "" {
@@ -30,7 +30,7 @@ func TestBridgePairsAndCallsOutboundWorker(t *testing.T) {
 	if !devices[0].Online {
 		t.Fatal("registered worker is offline")
 	}
-	result, err := client.Exec(context.Background(), device.ID, protocol.ExecRequest{Command: "Write-Output proxy-ok"})
+	result, err := client.Exec(context.Background(), device.ID, protocol.ExecRequest{Command: testshell.Native("Write-Output proxy-ok", "printf '%s\\n' proxy-ok")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestBridgePairsAndCallsOutboundWorker(t *testing.T) {
 	if file.ContentBase64 != base64.StdEncoding.EncodeToString([]byte("a")) {
 		t.Fatalf("unexpected pulled file: %+v", file)
 	}
-	task, err := client.StartTask(context.Background(), device.ID, protocol.TaskRequest{ExecRequest: protocol.ExecRequest{Command: "Write-Output task-ok"}})
+	task, err := client.StartTask(context.Background(), device.ID, protocol.TaskRequest{ExecRequest: protocol.ExecRequest{Command: testshell.Native("Write-Output task-ok", "printf '%s\\n' task-ok")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestBridgePairsAndCallsOutboundWorker(t *testing.T) {
 		t.Fatalf("session = %#v, error = %v", session, err)
 	}
 	defer func() { _, _ = client.CloseSession(context.Background(), device.ID, session.ID) }()
-	if _, err := client.WriteSession(context.Background(), device.ID, session.ID, "Write-Output bridge-session-ok\r\n"); err != nil {
+	if _, err := client.WriteSession(context.Background(), device.ID, session.ID, testshell.Native("Write-Output controller-session-ok\r\n", "printf '%s\\n' controller-session-ok\n")); err != nil {
 		t.Fatal(err)
 	}
 	var current protocol.Session
@@ -77,12 +77,12 @@ func TestBridgePairsAndCallsOutboundWorker(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(current.Stdout, "bridge-session-ok") {
+		if strings.Contains(current.Stdout, "controller-session-ok") {
 			break
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	if !strings.Contains(current.Stdout, "bridge-session-ok") {
+	if !strings.Contains(current.Stdout, "controller-session-ok") {
 		t.Fatalf("session output = %q", current.Stdout)
 	}
 	if _, err := client.CloseSession(context.Background(), device.ID, session.ID); err != nil {

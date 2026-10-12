@@ -31,23 +31,23 @@ type nonRetryablePairError struct{ err error }
 func (e nonRetryablePairError) Error() string { return e.err.Error() }
 func (e nonRetryablePairError) Unwrap() error { return e.err }
 
-func validateBridge(base string) error {
+func validateController(base string) error {
 	u, err := url.Parse(base)
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return errors.New("bridge must be an absolute HTTPS URL")
+		return errors.New("controller must be an absolute HTTPS URL")
 	}
 	if u.Scheme == "https" {
 		return nil
 	}
-	return errors.New("bridges require HTTPS")
+	return errors.New("controllers require HTTPS")
 }
 
 func (s *Server) Pair(ctx context.Context, base, fingerprint, statePath string, notify ...func(protocol.PairingRequest)) (protocol.Credentials, error) {
-	if err := validateBridge(base); err != nil {
+	if err := validateController(base); err != nil {
 		return protocol.Credentials{}, err
 	}
 	if fingerprint == "" {
-		return protocol.Credentials{}, errors.New("controller certificate fingerprint is required; select a controller discovered on the local network")
+		return protocol.Credentials{}, errors.New("controller certificate fingerprint is required; use discovery or a fingerprint verified on the controller")
 	}
 	transportConfig := transport.PinnedTLS(fingerprint)
 	client := &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: transportConfig}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -98,7 +98,7 @@ func (s *Server) Pair(ctx context.Context, base, fingerprint, statePath string, 
 		}
 		if status.Status == "approved" && status.Credentials != nil {
 			credentials = *status.Credentials
-			credentials.BridgeURL = strings.TrimRight(base, "/")
+			credentials.ControllerURL = strings.TrimRight(base, "/")
 			credentials.Workspace = s.cfg.Workspace
 			if credentials.DeviceID == "" || credentials.ConnectionID == "" || credentials.Token == "" || credentials.Fingerprint != fingerprint {
 				return credentials, errors.New("invalid pairing approval")
@@ -206,7 +206,7 @@ func retryablePairError(err error) bool {
 	if strings.Contains(lower, "certificate") || strings.Contains(lower, "fingerprint") || strings.Contains(lower, "tls: failed to verify") {
 		return false
 	}
-	return !errors.Is(err, transport.ErrBridgeCertificateMissing) && !errors.Is(err, transport.ErrBridgeCertificateMismatch)
+	return !errors.Is(err, transport.ErrControllerCertificateMissing) && !errors.Is(err, transport.ErrControllerCertificateMismatch)
 }
 
 func pairingHTTPError(prefix string, resp *http.Response) error {
@@ -229,13 +229,16 @@ func (s *Server) Connect(ctx context.Context, credentials protocol.Credentials) 
 	if credentials.ConnectionID == "" {
 		return nil, errors.New("connection_id is required; pair this Worker using a fresh state directory")
 	}
-	if err := validateBridge(credentials.BridgeURL); err != nil {
+	if credentials.Schema != 3 {
+		return nil, errors.New("unsupported Worker credentials schema; pair using fresh state")
+	}
+	if err := validateController(credentials.ControllerURL); err != nil {
 		return nil, err
 	}
 	if s.cfg.Workspace != credentials.Workspace {
 		return nil, errors.New("workspace changed; pair again to authorize it")
 	}
-	u, _ := url.Parse(credentials.BridgeURL)
+	u, _ := url.Parse(credentials.ControllerURL)
 	u.Scheme = "wss"
 	u.Path = "/v1/connect"
 	headers := http.Header{}
@@ -288,7 +291,7 @@ func (s *Server) Run(ctx context.Context, credentials protocol.Credentials, repo
 				return ctx.Err()
 			case <-peer.Done():
 			}
-			err = errors.New("bridge connection lost; reconnecting")
+			err = errors.New("controller connection lost; reconnecting")
 		}
 		if report != nil {
 			report(err)

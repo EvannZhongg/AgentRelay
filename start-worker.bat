@@ -2,9 +2,9 @@
 setlocal
 cd /d "%~dp0"
 
-if not exist "%~dp0AgentRelay.exe" (
-  echo [ERROR] AgentRelay.exe not found next to this launcher.
-  echo         Build it first:  go build -o AgentRelay.exe ./cmd/AgentRelay
+if not exist "%~dp0AgentRelay-worker.exe" (
+  echo [ERROR] AgentRelay-worker.exe not found next to this launcher.
+  echo         Build it first:  go build -o AgentRelay-worker.exe ./cmd/AgentRelay-worker
   echo.
   pause
   exit /b 1
@@ -21,9 +21,9 @@ echo  Press Ctrl+C to stop.
 echo.
 
 if "%~1"=="" (
-  "%~dp0AgentRelay.exe" worker serve
+  "%~dp0AgentRelay-worker.exe" serve
 ) else (
-  "%~dp0AgentRelay.exe" worker setup --workspace "%~1"
+  "%~dp0AgentRelay-worker.exe" setup --workspace "%~1"
 )
 set "CODE=%ERRORLEVEL%"
 echo.

@@ -8,14 +8,14 @@ import (
 	"os"
 	"path/filepath"
 
-	"AgentRelay/internal/bridge"
+	"AgentRelay/internal/controller"
 	"AgentRelay/internal/pathutil"
 	"AgentRelay/internal/protocol"
 )
 
 func pullCommand(args []string) error {
 	f := flag.NewFlagSet("pull", flag.ContinueOnError)
-	base := f.String("bridge", bridge.DefaultURL, "bridge URL")
+	base := f.String("controller", controller.DefaultURL, "controller URL")
 	id := f.String("device", "", "device ID")
 	path := f.String("path", "", "remote workspace-relative file path")
 	out := f.String("out", "", "local destination directory; omit to return base64 JSON")
@@ -33,7 +33,7 @@ func pullCommand(args []string) error {
 		return errors.New("pull requires --path or positional remote file paths")
 	}
 	files := make([]protocol.ReadResponse, 0, len(paths))
-	c := bridge.NewClient(*base)
+	c := controller.NewClient(*base)
 	for _, path := range paths {
 		file, err := c.ReadFile(context.Background(), *id, path)
 		if err != nil {

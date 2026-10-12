@@ -1,6 +1,9 @@
-package bridge
+package controller
 
 import (
+	"AgentRelay/internal/protocol"
+	"AgentRelay/internal/state"
+	"AgentRelay/internal/transport"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,10 +14,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/state"
-	"AgentRelay/internal/transport"
 )
 
 const DefaultURL = "https://localhost:8764"
@@ -35,7 +34,7 @@ func (e *responseError) Unwrap() error { return e.err }
 func NewClient(base string) *Client {
 	c := &Client{BaseURL: strings.TrimRight(base, "/"), HTTP: &http.Client{Timeout: 30 * time.Minute}}
 	var local registry
-	if state.Load(state.Path("bridge"), &local) == nil && local.Identity.Certificate != "" {
+	if state.Load(state.Path("controller"), &local) == nil && local.Identity.Certificate != "" {
 		c.HTTP.Transport = &http.Transport{TLSClientConfig: transport.PinnedTLS(local.Identity.Fingerprint())}
 	}
 	return c
@@ -92,7 +91,7 @@ func (c *Client) CreateDevice(ctx context.Context, req protocol.DeviceCreate) (o
 	err = c.Do(ctx, "POST", "/v1/devices", req, &out)
 	return
 }
-func (c *Client) AddSSH(ctx context.Context, id string, req protocol.SSHConfig) (out protocol.Connection, err error) {
+func (c *Client) AddConnection(ctx context.Context, id string, req protocol.ConnectionSpec) (out protocol.Connection, err error) {
 	err = c.Do(ctx, "POST", devicePath(id)+"/connections", req, &out)
 	return
 }
@@ -165,5 +164,10 @@ func (c *Client) WriteSession(ctx context.Context, id, session, input string) (o
 }
 func (c *Client) CloseSession(ctx context.Context, id, session string) (out protocol.Session, err error) {
 	err = c.Do(ctx, "DELETE", devicePath(id)+"/sessions/"+url.PathEscape(session), nil, &out)
+	return
+}
+
+func (c *Client) UpdateConnection(ctx context.Context, id, cid string, req protocol.ConnectionSpec) (out protocol.Connection, err error) {
+	err = c.Do(ctx, "PATCH", devicePath(id)+"/connections/"+url.PathEscape(cid), req, &out)
 	return
 }

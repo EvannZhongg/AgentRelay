@@ -1,6 +1,7 @@
-package bridge
+package controller
 
 import (
+	"AgentRelay/internal/protocol"
 	"bytes"
 	"encoding/json"
 	"net/http"
@@ -8,15 +9,13 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"AgentRelay/internal/protocol"
 )
 
 func TestSyncMappingIsBoundToStartedSession(t *testing.T) {
 	deviceID := "device-1"
 	server := &Server{
-		cfg:          Config{StatePath: filepath.Join(t.TempDir(), "bridge.json")},
-		store:        registry{Devices: map[string]record{deviceID: {Device: protocol.Device{ID: deviceID, Authorized: true, Mappings: map[string]string{}}}}},
+		cfg:          Config{StatePath: filepath.Join(t.TempDir(), "controller.json")},
+		store:        registry{Connections: map[string]connectionRecord{"connection-1": {Connection: protocol.Connection{ID: "connection-1", DeviceID: deviceID, Workspace: protocol.WorkspacePolicy{Mode: protocol.WorkspaceLocalSync, Root: t.TempDir()}}}}, Devices: map[string]record{deviceID: {Device: protocol.Device{ID: deviceID, Authorized: true, ActiveConnection: "connection-1", Mappings: map[string]string{}}}}},
 		syncMappings: map[syncMappingKey]syncMapping{},
 	}
 	source := t.TempDir()

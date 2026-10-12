@@ -21,8 +21,8 @@ type Identity struct {
 }
 
 var (
-	ErrBridgeCertificateMissing  = errors.New("bridge certificate missing")
-	ErrBridgeCertificateMismatch = errors.New("bridge certificate does not match pairing identity")
+	ErrControllerCertificateMissing  = errors.New("controller certificate missing")
+	ErrControllerCertificateMismatch = errors.New("controller certificate does not match pairing identity")
 )
 
 func Token() string {
@@ -42,7 +42,7 @@ func NewIdentity() (Identity, error) {
 	if err != nil {
 		return Identity{}, err
 	}
-	template := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: "AgentRelay Bridge"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().AddDate(10, 0, 0), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	template := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: "AgentRelay Controller"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().AddDate(10, 0, 0), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
 		return Identity{}, err
@@ -74,11 +74,11 @@ func (i Identity) Fingerprint() string {
 func PinnedTLS(fingerprint string) *tls.Config {
 	return &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true, VerifyConnection: func(cs tls.ConnectionState) error {
 		if len(cs.PeerCertificates) == 0 {
-			return ErrBridgeCertificateMissing
+			return ErrControllerCertificateMissing
 		}
 		sum := sha256.Sum256(cs.PeerCertificates[0].Raw)
 		if hex.EncodeToString(sum[:]) != fingerprint {
-			return ErrBridgeCertificateMismatch
+			return ErrControllerCertificateMismatch
 		}
 		return nil
 	}}

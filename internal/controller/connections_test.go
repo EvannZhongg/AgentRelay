@@ -1,6 +1,8 @@
-package bridge
+package controller
 
 import (
+	"AgentRelay/internal/protocol"
+	"AgentRelay/internal/state"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -8,9 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/state"
 )
 
 func adminRequest(t *testing.T, s *Server, method, path string, in any) *httptest.ResponseRecorder {
@@ -27,7 +26,7 @@ func adminRequest(t *testing.T, s *Server, method, path string, in any) *httptes
 }
 func newConnectionServer(t *testing.T) *Server {
 	t.Helper()
-	s, err := New(Config{StatePath: filepath.Join(t.TempDir(), "bridge.json")})
+	s, err := New(Config{StatePath: filepath.Join(t.TempDir(), "controller.json")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +35,7 @@ func newConnectionServer(t *testing.T) *Server {
 }
 func createSSHDevice(t *testing.T, s *Server, name string) protocol.Device {
 	t.Helper()
-	w := adminRequest(t, s, "POST", "/v1/devices", protocol.DeviceCreate{Name: name, Workspace: "/tmp/workspace", SSH: &protocol.SSHConfig{Host: "localhost", User: "test", Port: 22}})
+	w := adminRequest(t, s, "POST", "/v1/devices", protocol.DeviceCreate{Name: name, Connection: protocol.ConnectionSpec{Kind: "ssh", Workspace: protocol.WorkspacePolicy{Root: "/tmp/workspace", Mode: protocol.WorkspaceRemote}, SSH: &protocol.SSHConfig{Host: "localhost", User: "test", Port: 22}}})
 	if w.Code != 201 {
 		t.Fatalf("create: %d %s", w.Code, w.Body.String())
 	}
@@ -138,7 +137,7 @@ func TestWorkerPairingAttachesToOneLogicalDevice(t *testing.T) {
 	}
 }
 func TestRejectOldStateWithoutMigration(t *testing.T) {
-	filename := filepath.Join(t.TempDir(), "bridge.json")
+	filename := filepath.Join(t.TempDir(), "controller.json")
 	if err := state.Save(filename, map[string]any{"devices": map[string]any{"old": map[string]any{"device": protocol.Device{ID: "old", Handle: "dev-old"}, "token_hash": "legacy"}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +148,7 @@ func TestRejectOldStateWithoutMigration(t *testing.T) {
 func TestSwitchConnectionRejectsActiveSync(t *testing.T) {
 	s := newConnectionServer(t)
 	d := createSSHDevice(t, s, "test")
-	w := adminRequest(t, s, "POST", "/v1/devices/"+d.ID+"/connections", protocol.SSHConfig{Host: "other", Port: 22, User: "test"})
+	w := adminRequest(t, s, "POST", "/v1/devices/"+d.ID+"/connections", protocol.ConnectionSpec{Kind: "ssh", Workspace: protocol.WorkspacePolicy{Root: "/other-repo", Mode: protocol.WorkspaceRemote}, SSH: &protocol.SSHConfig{Host: "other", Port: 22, User: "test"}})
 	var c protocol.Connection
 	_ = json.Unmarshal(w.Body.Bytes(), &c)
 	if err := s.beginSyncStart(d.ID, d.ActiveConnection); err != nil {
@@ -177,7 +176,7 @@ func TestRevocationCancelsEverySSHCall(t *testing.T) {
 	d := createSSHDevice(t, s, "test")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s.sshCalls[d.ActiveConnection] = map[string]context.CancelFunc{"in-flight": cancel}
+	s.calls[d.ActiveConnection] = map[string]context.CancelFunc{"in-flight": cancel}
 	no := false
 	w := adminRequest(t, s, "PATCH", "/v1/devices/"+d.ID, DeviceUpdate{Authorized: &no})
 	if w.Code != 200 {

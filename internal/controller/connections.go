@@ -1,62 +1,72 @@
-package bridge
+package controller
 
 import (
+	"AgentRelay/internal/backend"
+	"AgentRelay/internal/protocol"
+	"AgentRelay/internal/transport"
+	"AgentRelay/internal/workspace"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"sort"
 	"time"
-
-	"AgentRelay/internal/backend"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/transport"
 )
 
-func sshCapabilities() protocol.Capabilities {
-	return protocol.Capabilities{Exec: true, Files: true, Shells: []string{"sh"}, MaxPayload: 32 << 20}
-}
-
 func (s *Server) cancelConnectionLocked(cid string) {
-	for _, cancel := range s.sshCalls[cid] {
+	for _, cancel := range s.calls[cid] {
 		cancel()
 	}
 }
-func (s *Server) callSSH(ctx context.Context, c protocol.Connection, req transport.Request) (transport.Response, error) {
+func (s *Server) callConnection(ctx context.Context, c protocol.Connection, req transport.Request) (transport.Response, error) {
 	s.mu.Lock()
 	current, ok := s.store.Connections[c.ID]
 	d, exists := s.store.Devices[c.DeviceID]
-	if !ok || !exists || !d.Device.Authorized || current.Connection.SSH != c.SSH || c.SSH == nil {
+	if !ok || !exists || !d.Device.Authorized || current.Connection.Revision != c.Revision {
 		s.mu.Unlock()
 		return transport.Response{}, &backend.Error{Status: 403, Message: "connection authorization or configuration changed"}
 	}
+	adapter := s.adapters[c.Kind]
+	if adapter == nil {
+		s.mu.Unlock()
+		return transport.Response{}, &backend.Error{Status: 501, Message: "connection adapter unavailable"}
+	}
+	var live backend.Call
+	if peer := s.workerPeers[c.ID]; peer != nil {
+		live = peer.Call
+	}
+	call, bindErr := adapter.Bind(c, live)
+	if bindErr != nil {
+		s.mu.Unlock()
+		return transport.Response{}, bindErr
+	}
 	callCtx, cancel := context.WithCancel(ctx)
 	callID := transport.Token()
-	if s.sshCalls == nil {
-		s.sshCalls = map[string]map[string]context.CancelFunc{}
+	if s.calls == nil {
+		s.calls = map[string]map[string]context.CancelFunc{}
 	}
-	if s.sshCalls[c.ID] == nil {
-		s.sshCalls[c.ID] = map[string]context.CancelFunc{}
+	if s.calls[c.ID] == nil {
+		s.calls[c.ID] = map[string]context.CancelFunc{}
 	}
-	s.sshCalls[c.ID][callID] = cancel
+	s.calls[c.ID][callID] = cancel
 	s.mu.Unlock()
 	defer func() {
 		cancel()
 		s.mu.Lock()
-		delete(s.sshCalls[c.ID], callID)
-		if len(s.sshCalls[c.ID]) == 0 {
-			delete(s.sshCalls, c.ID)
+		delete(s.calls[c.ID], callID)
+		if len(s.calls[c.ID]) == 0 {
+			delete(s.calls, c.ID)
 		}
 		s.mu.Unlock()
 	}()
-	return backend.SSHCaller(*c.SSH, d.Device.Workspace)(callCtx, req)
+	return call(callCtx, req)
 }
 
 func (s *Server) markConnectionFailed(c protocol.Connection, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current, ok := s.store.Connections[c.ID]
-	if !ok || current.Connection.SSH != c.SSH {
+	if !ok || current.Connection.Revision != c.Revision {
 		return
 	}
 	current.Connection.Online = false
@@ -71,7 +81,17 @@ func (s *Server) refreshDeviceLocked(id string) {
 		return
 	}
 	c := s.store.Connections[r.Device.ActiveConnection].Connection
+	r.Device.Workspace = c.Workspace.Root
+	r.Device.WorkspaceMode = c.Workspace.Mode
+	r.Device.Mappings = c.Workspace.Mappings
+	r.Device.OS = c.OS
+	r.Device.Architecture = c.Architecture
+	r.Device.Metadata = c.Metadata
+	r.Device.LastSeen = c.LastSeen
 	r.Device.Capabilities = c.Capabilities
+	if c.Workspace.Mode == protocol.WorkspaceRemote {
+		r.Device.Capabilities.Sync = false
+	}
 	r.Device.Online = c.Online && r.Device.Authorized
 	s.store.Devices[id] = r
 }
@@ -125,17 +145,34 @@ func (s *Server) endSyncStart(id string) {
 	}
 }
 
+func (s *Server) validateSpec(in protocol.ConnectionSpec) error {
+	if err := workspace.Validate(in.Workspace); err != nil {
+		return err
+	}
+	adapter := s.adapters[in.Kind]
+	if adapter == nil {
+		return errors.New("unknown connection adapter")
+	}
+	return adapter.Validate(in)
+}
+func (s *Server) newConnection(id string, in protocol.ConnectionSpec) protocol.Connection {
+	return protocol.Connection{ID: transport.Token(), Revision: transport.Token(), DeviceID: id, Kind: in.Kind, SSH: in.SSH, Options: in.Options, Workspace: in.Workspace, Capabilities: s.adapters[in.Kind].Capabilities()}
+}
 func (s *Server) createDevice(w http.ResponseWriter, r *http.Request) {
 	var in protocol.DeviceCreate
 	if err := readJSON(r, &in); err != nil {
 		writeError(w, 400, err)
 		return
 	}
-	if !validAlias(in.Name) || in.SSH == nil {
-		writeError(w, 400, errors.New("name, workspace and SSH configuration are required"))
+	if !validAlias(in.Name) {
+		writeError(w, 400, errors.New("device alias is required"))
 		return
 	}
-	if err := transport.ValidateSSH(*in.SSH, in.Workspace); err != nil {
+	if in.Connection.Kind == "worker" {
+		writeError(w, 400, errors.New("Worker connections require approved pairing"))
+		return
+	}
+	if err := s.validateSpec(in.Connection); err != nil {
 		writeError(w, 400, err)
 		return
 	}
@@ -145,17 +182,19 @@ func (s *Server) createDevice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, errors.New("device alias is already in use"))
 		return
 	}
-	id, cid := transport.Token(), transport.Token()
-	d := protocol.Device{ID: id, Handle: s.newDeviceHandleLocked(), Name: in.Name, Workspace: in.Workspace, Authorized: true, DesktopAccess: "granted", ActiveConnection: cid, Capabilities: sshCapabilities()}
+	id := transport.Token()
+	c := s.newConnection(id, in.Connection)
+	d := protocol.Device{ID: id, Handle: s.newDeviceHandleLocked(), Name: in.Name, Authorized: true, DesktopAccess: "granted", ActiveConnection: c.ID}
 	s.store.Devices[id] = record{Device: d}
-	s.store.Connections[cid] = connectionRecord{Connection: protocol.Connection{ID: cid, DeviceID: id, Kind: "ssh", SSH: in.SSH, Capabilities: sshCapabilities()}}
+	s.store.Connections[c.ID] = connectionRecord{Connection: c}
+	s.refreshDeviceLocked(id)
 	if err := s.save(); err != nil {
 		delete(s.store.Devices, id)
-		delete(s.store.Connections, cid)
+		delete(s.store.Connections, c.ID)
 		writeError(w, 500, err)
 		return
 	}
-	writeJSON(w, 201, s.deviceViewLocked(d))
+	writeJSON(w, 201, s.deviceViewLocked(s.store.Devices[id].Device))
 }
 
 // Connection management belongs to the loopback controller UI/API, not MCP.
@@ -165,24 +204,28 @@ func (s *Server) connectionRoute(w http.ResponseWriter, r *http.Request, id stri
 			methodNotAllowed(w)
 			return
 		}
-		var in protocol.SSHConfig
+		var in protocol.ConnectionSpec
 		if err := readJSON(r, &in); err != nil {
+			writeError(w, 400, err)
+			return
+		}
+		if in.Kind == "worker" {
+			writeError(w, 400, errors.New("Worker connections require approved pairing"))
+			return
+		}
+		if err := s.validateSpec(in); err != nil {
 			writeError(w, 400, err)
 			return
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		d, ok := s.store.Devices[id]
-		if !ok {
+		if _, ok := s.store.Devices[id]; !ok {
 			writeError(w, 404, errors.New("device not found"))
 			return
 		}
-		if err := transport.ValidateSSH(in, d.Device.Workspace); err != nil {
-			writeError(w, 400, err)
-			return
-		}
-		cid := transport.Token()
-		c := connectionRecord{Connection: protocol.Connection{ID: cid, DeviceID: id, Kind: "ssh", SSH: &in, Capabilities: sshCapabilities()}}
+		configured := s.newConnection(id, in)
+		cid := configured.ID
+		c := connectionRecord{Connection: configured}
 		s.store.Connections[cid] = c
 		if err := s.save(); err != nil {
 			delete(s.store.Connections, cid)
@@ -197,6 +240,7 @@ func (s *Server) connectionRoute(w http.ResponseWriter, r *http.Request, id stri
 	c, ok := s.store.Connections[cid]
 	d, exists := s.store.Devices[id]
 	s.mu.RUnlock()
+	revision := c.Connection.Revision
 	if !ok || !exists || c.Connection.DeviceID != id {
 		writeError(w, 404, errors.New("connection not found"))
 		return
@@ -213,17 +257,21 @@ func (s *Server) connectionRoute(w http.ResponseWriter, r *http.Request, id stri
 		methodNotAllowed(w)
 		return
 	}
-	var in protocol.SSHConfig
+	var in protocol.ConnectionSpec
 	if r.Method == "PATCH" {
-		if c.Connection.Kind != "ssh" {
-			writeError(w, 400, errors.New("Worker connections are configured by pairing"))
-			return
-		}
 		if err := readJSON(r, &in); err != nil {
 			writeError(w, 400, err)
 			return
 		}
-		if err := transport.ValidateSSH(in, d.Device.Workspace); err != nil {
+		if in.Kind != c.Connection.Kind {
+			writeError(w, 400, errors.New("connection transport kind is immutable"))
+			return
+		}
+		if in.Kind == "worker" && in.Workspace.Root != c.Connection.Workspace.Root {
+			writeError(w, 400, errors.New("Worker workspace root changes require pairing"))
+			return
+		}
+		if err := s.validateSpec(in); err != nil {
 			writeError(w, 400, err)
 			return
 		}
@@ -234,6 +282,10 @@ func (s *Server) connectionRoute(w http.ResponseWriter, r *http.Request, id stri
 	d, exists = s.store.Devices[id]
 	if !ok || !exists || c.Connection.DeviceID != id {
 		writeError(w, 404, errors.New("connection not found"))
+		return
+	}
+	if c.Connection.Revision != revision {
+		writeError(w, 409, errors.New("connection changed while applying configuration"))
 		return
 	}
 	if d.Device.ActiveConnection == cid && s.hasSyncMappingsLocked(id) {
@@ -249,8 +301,13 @@ func (s *Server) connectionRoute(w http.ResponseWriter, r *http.Request, id stri
 		}
 	} else {
 		updated := c
-		updated.Connection.SSH = &in
-		updated.Connection.Online = false
+		updated.Connection.SSH = in.SSH
+		updated.Connection.Options = in.Options
+		updated.Connection.Workspace = in.Workspace
+		updated.Connection.Revision = transport.Token()
+		if in.Kind != "worker" {
+			updated.Connection.Online = false
+		}
 		updated.Connection.LastError = ""
 		s.store.Connections[cid] = updated
 	}
@@ -263,10 +320,10 @@ func (s *Server) connectionRoute(w http.ResponseWriter, r *http.Request, id stri
 	}
 	s.cancelConnectionLocked(cid)
 	if r.Method == "DELETE" {
-		if peer := s.connections[cid]; peer != nil {
+		if peer := s.workerPeers[cid]; peer != nil {
 			peer.Close()
 		}
-		delete(s.connections, cid)
+		delete(s.workerPeers, cid)
 		w.WriteHeader(204)
 	} else {
 		writeJSON(w, 200, s.store.Connections[cid].Connection)
@@ -278,21 +335,14 @@ func (s *Server) testConnection(w http.ResponseWriter, r *http.Request, d protoc
 		writeError(w, 403, errors.New("device authorization revoked"))
 		return
 	}
-	if c.Connection.Kind == "worker" {
-		if !c.Connection.Online {
-			writeError(w, 503, errors.New("Worker is offline"))
-		} else {
-			writeJSON(w, 200, c.Connection)
-		}
-		return
-	}
-	if c.Connection.SSH == nil {
-		writeError(w, 400, errors.New("SSH configuration missing"))
+	adapter := s.adapters[c.Connection.Kind]
+	if adapter == nil {
+		writeError(w, 501, errors.New("connection adapter unavailable"))
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	resp, err := s.callSSH(ctx, c.Connection, transport.Request{Method: "GET", Path: "/probe"})
+	resp, err := s.callConnection(ctx, c.Connection, adapter.Probe())
 	var probed protocol.Device
 	if err == nil {
 		if resp.Status != 200 {
@@ -307,7 +357,7 @@ func (s *Server) testConnection(w http.ResponseWriter, r *http.Request, d protoc
 	defer s.mu.Unlock()
 	current, ok := s.store.Connections[c.Connection.ID]
 	device, exists := s.store.Devices[d.ID]
-	if !ok || !exists || !device.Device.Authorized || current.Connection.SSH != c.Connection.SSH {
+	if !ok || !exists || !device.Device.Authorized || current.Connection.Revision != c.Connection.Revision {
 		writeError(w, 409, errors.New("connection changed during test"))
 		return
 	}
@@ -318,13 +368,12 @@ func (s *Server) testConnection(w http.ResponseWriter, r *http.Request, d protoc
 	if err != nil {
 		updated.Connection.LastError = err.Error()
 	} else {
+		updated.Connection.OS = probed.OS
+		updated.Connection.Architecture = probed.Architecture
+		updated.Connection.Metadata = probed.Metadata
+		updated.Connection.LastSeen = time.Now()
 		updated.Connection.Capabilities = probed.Capabilities
-		if device.Device.ActiveConnection == c.Connection.ID {
-			device.Device.OS = probed.OS
-			device.Device.Architecture = probed.Architecture
-			device.Device.LastSeen = time.Now()
-			s.store.Devices[d.ID] = device
-		}
+
 	}
 	s.store.Connections[c.Connection.ID] = updated
 	s.refreshDeviceLocked(d.ID)

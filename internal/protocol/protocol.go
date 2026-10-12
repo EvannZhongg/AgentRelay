@@ -16,6 +16,7 @@ type Device struct {
 	Authorized       bool              `json:"authorized"`
 	DesktopAccess    string            `json:"desktop_access,omitempty"`
 	Workspace        string            `json:"workspace"`
+	WorkspaceMode    string            `json:"workspace_mode"`
 	Mappings         map[string]string `json:"workspace_mappings,omitempty"`
 	Capabilities     Capabilities      `json:"capabilities"`
 	Metadata         map[string]string `json:"metadata,omitempty"`
@@ -41,10 +42,11 @@ type Health struct {
 }
 
 type ExecRequest struct {
-	Command    string            `json:"command"`
-	WorkingDir string            `json:"working_dir,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
-	TimeoutMS  int64             `json:"timeout_ms,omitempty"`
+	WorkingDirKind string            `json:"working_dir_kind,omitempty"`
+	Command        string            `json:"command"`
+	WorkingDir     string            `json:"working_dir,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	TimeoutMS      int64             `json:"timeout_ms,omitempty"`
 }
 
 type ExecResponse struct {
@@ -144,9 +146,10 @@ type TaskRequest struct {
 }
 
 type SessionRequest struct {
-	Command    string            `json:"command"`
-	WorkingDir string            `json:"working_dir,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
+	WorkingDirKind string            `json:"working_dir_kind,omitempty"`
+	Command        string            `json:"command"`
+	WorkingDir     string            `json:"working_dir,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
 }
 
 type SessionInput struct {
@@ -189,10 +192,11 @@ type PairingStatus struct {
 }
 
 type Credentials struct {
-	ConnectionID string `json:"connection_id"`
-	BridgeURL    string `json:"bridge_url"`
-	Fingerprint  string `json:"fingerprint"`
-	DeviceID     string `json:"device_id"`
-	Token        string `json:"token"`
-	Workspace    string `json:"workspace"`
+	Schema        int    `json:"schema"`
+	ConnectionID  string `json:"connection_id"`
+	ControllerURL string `json:"controller_url"`
+	Fingerprint   string `json:"fingerprint"`
+	DeviceID      string `json:"device_id"`
+	Token         string `json:"token"`
+	Workspace     string `json:"workspace"`
 }

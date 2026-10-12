@@ -1,61 +1,77 @@
 # Architecture
 
-AgentRelay is an infrastructure layer for coding agents. It does not run a model, plan work, or expose an agent loop. The controller hosts the Bridge and the agent-facing CLI/MCP adapter; target computers expose capabilities through SSH or a native Worker. Devices own stable identity; connections own transport and credentials. See [Devices, connections and capabilities](connections.md) for the schema, capability matrix and management workflow.
+AgentRelay Controller runs beside an existing coding agent on Windows, macOS or Linux. The agent itself is outside this project. Targets either use SSH or run the standalone native AgentRelay-worker executable. Worker targets need no Python, Node.js, LLM or Agent Runtime.
 
-## Components
+```text
+Agent -> MCP / CLI -> Controller local HTTPS API
+                         |
+                   logical device registry
+                         |
+                 selected connection + workspace policy
+                         |
+                    capability interfaces
+                         |
+                  connection adapter registry
+                    /                \
+                  SSH           Worker WSS RPC       future adapters
+                   |                  |
+            ephemeral executor    native operations
+```
 
-| Component | Responsibility |
+## Boundaries
+
+| Layer | Ownership |
 | --- | --- |
-| Bridge | Pairing, device records, authorization, workspace mappings, request routing and local HTTPS API |
-| Worker | Outbound authenticated connection, native shell execution, file access, tasks, sessions and optional desktop operations |
-| CLI / GUI | Human-facing controller commands and the embedded cross-platform browser UI for pairing, device management and remote operations |
-| MCP adapter | Stdio JSON-RPC server exposing the remote operations as MCP tools |
-| Discovery | LAN advertisement of the controller URL and certificate fingerprint used during pairing |
+| Device identity | Stable ID, handle, alias, authorization, desktop permission and execution connection selection |
+| Connection | Transport configuration, credential hash, configuration revision, root, workspace mode, source mappings, capabilities, platform metadata and status |
+| Workspace policy | Determines source authority and resolves controller/target paths before execution |
+| Capability backend | Optional Exec, Files, Sync, Tasks, Sessions and Desktop interfaces |
+| Transport | RPC frames, heartbeat, cancellation and byte transfer |
+| Worker | Native shell, file, task, session and optional desktop execution; outbound connection and pairing |
 
-The request path is `MCP/CLI -> Bridge HTTPS -> selected connection -> capability backend`. Native Worker connections use authenticated WSS; SSH connections use strict OpenSSH channels and an ephemeral Python executor. The Worker does not listen for inbound HTTP requests. `internal/protocol` defines shared messages, `internal/backend` composes optional capability interfaces and `internal/transport` carries RPC.
+`internal/controller` separates service lifecycle, enrollment/WSS registration, device management, connection management, operation routing and workspace/sync orchestration. Operation routing never inspects a connection kind or accesses a WebSocket peer. `internal/connection.Adapter` validates configuration, binds a caller and defines capability probing. Register another adapter through `controller.Config.Adapters`; MCP tools and device selectors remain unchanged. `internal/backend` implements the capability contract; `internal/transport` carries requests.
 
-## Trust And Pairing
+Controller device listings project the selected connection's workspace, capabilities, platform and availability. These values are not persisted as device identity. A device may have several connections with different roots and policies. Attachment is explicit; hostname matching never merges identities.
 
-1. The controller starts the Bridge and advertises its HTTPS URL, port and certificate fingerprint on the local network.
-2. The Worker selects a discovered controller, pins the advertised fingerprint, and sends a pairing request with its proposed name and workspace.
-3. The controller shows a short verification number. The operator compares it with the Worker output and approves or rejects the request.
-4. Approval creates a device or attaches to an explicitly selected existing device with the same workspace. Credentials belong to a new Worker connection. The Worker stores the Bridge URL, fingerprint, device ID, connection ID, credential and workspace, then opens the outbound WSS connection.
+## Deployment
 
-Pairing requests expire after five minutes. A manually entered URL without a trusted discovery fingerprint is rejected. Revoking a device is persisted before its active connection is closed; removal deletes the device record and invalidates its credentials.
+Controller installations contain `AgentRelay` (CLI, Controller, browser GUI) and `AgentRelay-mcp` (stdio MCP adapter), plus the user's agent. Worker installations contain only `AgentRelay-worker` and pairing state. Worker does not depend on the Controller, SSH executor or Controller source-scanning packages. Libraries are linked into the executable. `scripts/build.ps1` and `scripts/build.sh` build CGO-free Windows/macOS/Linux amd64 and arm64 binaries.
 
-The controller management API is loopback-only. Remote computers can pair and establish their authenticated Worker connection, but cannot call controller device-management endpoints directly. `AgentRelay gui` serves the embedded UI from the same Bridge origin, so it uses the same registry and API as the CLI and does not maintain a second device database. Each approved pairing receives a persistent short handle; agent-facing selectors use that handle or the managed alias, never a connection-order number.
+Windows uses built-in PowerShell; macOS/Linux use `sh`. Cancellation terminates process trees on Windows and process groups on POSIX. Desktop support is optional: Windows/macOS have native implementations; Linux advertises desktop as unsupported. macOS capture/input require Screen Recording/Accessibility permissions and an interactive login session.
 
-## Workspaces And Operations
+## Workspace Authority
 
-The controller workspace is the source of truth. `sync` scans the local directory with gitignore-compatible rules, sends a SHA-256 manifest, uploads only changed files in 4 MiB chunks, and applies verified staging files with rollback on reported commit errors. `update` mode preserves remote extras; `mirror` deletes only paths recorded in an earlier managed manifest and excludes ignored paths. A successful commit persists a mapping from the absolute controller path to the Worker-relative root. `exec`, task creation and session creation may then use the mapped controller path or an explicit Worker-relative path. File reads and writes are resolved below the authorized Worker workspace.
+Every connection has a `workspace` object with `root`, `mode` and optional `mappings`:
 
-Sync sessions expire after 30 minutes. Upload chunks are checksum-verified and idempotent by path and offset. Incomplete or aborted sessions only leave staging data, which is removed on abort, Worker shutdown, or the next sync after expiry; target files are not changed before commit. No target file can contain a partial upload, although a Worker process crash during commit may leave a mixed tree. Worker-managed manifests and staging data live below the reserved `.agentrelay` workspace directory. Source and destination symbolic links are rejected.
+| Mode | Source authority | Command paths | Sync |
+| --- | --- | --- | --- |
+| `local_sync` | Controller source is authoritative for synchronized projects | Target-relative paths work immediately; mapped absolute Controller paths work after a successful sync | Requires backend sync capability |
+| `remote` | Repository on the target is authoritative | Target-relative paths or absolute target paths within the authorized root | Disabled to avoid overwriting remote source |
 
-Synchronous execution is cancelled when its RPC connection is lost. Tasks and shell sessions can outlive an MCP request and survive Bridge/network reconnection while the same Worker process remains alive. A Worker restart retains identity and workspace credentials but does not reconstruct running processes or in-memory task/session records.
+Worker defaults to `local_sync`; SSH defaults to `remote`. Worker can also use `remote`. Execution never requires a prior sync: an empty working directory means the authorized root; a target-relative directory can reference an existing repository in either mode.
 
-Each task and session store retains at most 128 records. Finished records expire after one hour; active processes are never evicted. Output streams retain up to 4 MiB and report `output_truncated`. Sessions use native shell pipes, not a PTY, and do not support terminal resizing or interactive password prompts.
+`working_dir_kind` (`--dir-kind` in CLI) is `auto`, `local` or `remote`. `auto` follows the selected mode. `local` requires a mapping in `local_sync`; `remote` always interprets the path on the target. This resolves ambiguity when both hosts have similar absolute paths. Target path handling is independent of the Controller OS, including Windows drive paths and POSIX roots. File reads always address the target filesystem. Native backends perform their own path checks as well.
 
-## Persistence
+`sync` scans local source using gitignore-compatible rules and SHA-256 manifests, uploading changes in 4 MiB chunks. `update` retains target extras; `mirror` deletes only previously managed paths absent from source. Successful remote commit persists a mapping on that connection. Failed or dry-run syncs do not create mappings. Switching, editing or deleting the selected connection is blocked while sync is active. Maps do not carry over when selecting another connection.
 
-State is stored under the current user's `AgentRelay` configuration directory (`%APPDATA%\AgentRelay` on Windows). Set `AGENTRELAY_HOME` to isolate a complete CLI/MCP/Bridge installation. The Bridge persists its TLS identity, device IDs, credential hashes, aliases, authorization, desktop control permission, workspace roots and project mappings. Controller-side file hashes are cached there by source path. The Worker persists pairing credentials and its workspace; managed sync manifests live in the workspace's reserved `.agentrelay` directory. Credentials and private device IDs are not returned in agent-facing device listings.
+Sync sessions expire after 30 minutes. Files are staged and checksum-verified before commit; abort/shutdown/expiry removes staging. Commit rolls back reported errors, but a process crash mid-commit can leave a mixed tree. `.agentrelay` is reserved for staging/manifests. Synchronization rejects symbolic links.
 
-After a Bridge restart, saved devices initially appear offline. Workers reconnect with exponential backoff (up to 30 seconds) and refresh capabilities without replacing aliases or mappings. If the saved Bridge address changes, run `AgentRelay worker setup` to pair again.
+## Enrollment And Trust
 
-## Controller API Scope
+Worker opens outbound WSS and no listening port. Discovery advertises the HTTPS address and certificate fingerprint (UDP 8763; default HTTPS/WSS TCP 8764). Alternatively supply `--controller` and a fingerprint verified on the Controller. Unpinned URLs are rejected.
 
-The Bridge exposes health and pairing endpoints to the network as needed for setup. Device management and operation endpoints are local-only:
+Pairing shows a verification number on both hosts and expires after five minutes. Approval creates a device or attaches a connection to a selected authorized device, preserving handle/alias. Each connection receives independent credentials and an authorized Worker root. Changing a Worker root requires pairing again; changing its workspace mode is Controller policy configuration.
 
-- Pairing and connection: `GET /v1/health`, `POST /v1/pair`, `GET /v1/pair/{request-id}`, `GET /v1/connect`.
-- Pairing approval and devices: `/v1/pair-requests`, `/v1/devices`.
-- Management UI: `GET /ui` (served by the same Bridge registry and origin).
-- Operations: `/v1/devices/{id}/exec`, `/files/sync/start`, `/files/sync/{session}/{manifest,plan,file,commit}`, `/files/read`, `/tasks`, `/sessions` and their sub-resources.
-- Desktop: `GET /v1/devices/{id}/desktop`, `POST /v1/devices/{id}/desktop/capture`, `POST /v1/devices/{id}/desktop/input`.
+Management/operation APIs are loopback-only with origin checks. WSS transport code does not own device identity. Revocation persists before all connections and in-flight operations are cancelled. Configuration revisions reject stale requests and probe results. There is no automatic transport fallback or command replay.
 
-Bridge state schema 2 stores device and connection maps separately. Previous state and Worker credentials are rejected; no migration or compatibility layers are provided. Service installation, PTY support and multi-device scheduling are outside the current implementation.
+Shell commands run with the target account's normal privileges; a workspace is a file/directory policy, not an OS sandbox. AgentRelay does not install compilers or project dependencies on the target.
 
-## Failure And Recovery Rules
+## State And Resources
 
-- Failed or interrupted RPC calls are never automatically replayed because the operation may already have started. Sync chunk uploads are the exception: the client may safely retry an identical chunk at the same offset; commit is not replayed automatically.
-- A disconnected Worker is shown as offline until it reconnects; saved aliases and mappings remain available.
-- A still-running task cannot be retrieved. Poll it with `get` until `finished_at` is set, then call `retrieve`.
-- Desktop input is serialized in the Worker and is never replayed after reconnecting.
+State lives in the user's AgentRelay configuration directory or `AGENTRELAY_HOME`. `controller.json` contains schema **3**, TLS identity and separate device/connection maps. Worker credentials require schema **3**. Old state is rejected without migration, backfill or compatibility routes; configure/pair using fresh state. Commands are `AgentRelay controller serve`, `AgentRelay-worker setup|serve` and `--controller`, with no old Bridge/combined-Worker aliases.
+
+Restart marks connections offline. Workers reconnect with bounded exponential backoff; SSH needs a connectivity test. Tasks/sessions survive network/Controller reconnect while the same Worker remains alive, but Worker restart does not restore processes. IDs belong to their originating connection. Each store retains at most 128 records, finished records expire after an hour, and output is bounded to 4 MiB with truncation metadata. Sessions use shell pipes, not a PTY.
+
+Interrupted commands are never replayed. Sync chunk uploads can retry identical offsets/checksums; commit and desktop input cannot. If remote commit succeeds but saving the Controller mapping fails, the API reports that partial outcome explicitly.
+
+See [connections](connections.md) for API examples and [development](development.md) for verification. Native Windows and Linux/WSL tests can run locally; macOS runtime/permission checks need a Mac. CI runs native test jobs on all three operating systems.

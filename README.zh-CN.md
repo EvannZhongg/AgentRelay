@@ -5,7 +5,7 @@
 AgentRelay 让 Coding Agent 安全、受控地连接其他电脑上的原生执行环境。Agent 只运行在主控电脑上，通过统一设备能力接口执行操作；每台设备可选择 SSH 或原生 Worker 连接。
 
 ```text
-Coding Agent -- MCP stdio / CLI --> Bridge（主控端，HTTPS）
+Coding Agent -- MCP stdio / CLI --> Controller（主控端，HTTPS）
                                       | 设备的执行连接
                         +-------------+-------------+
                         |                           |
@@ -18,34 +18,35 @@ Worker 不开放入站端口。局域网、网线以及未来的 USB IP 网络�
 
 ## 使用条件
 
-- 一台运行 Coding Agent 的 Windows 主控电脑，当前以 Windows PowerShell 为主要测试目标。
+- 一台运行 Coding Agent 和 AgentRelay Controller 的 Windows、macOS 或 Linux 主控电脑。
 - 一台提供 Workspace 目录的目标电脑，可使用 SSH + Python 3（POSIX 系统）或原生 AgentRelay Worker。
 - Worker 能访问主控电脑；主控默认接收 TCP `8764`，局域网发现使用 UDP `8763`。
-- macOS 桌面能力还需要“屏幕录制”和“辅助功能”权限。POSIX Shell 和 macOS 实机运行仍属实验性质。
+- Worker 被控端仅运行一个原生可执行文件，不需要 Python、Node.js、LLM 或 Agent Runtime。macOS 桌面能力需要“屏幕录制”和“辅助功能”权限；Linux 暂不提供桌面操作。
 
 ## 快速开始
 
-从仓库构建两个程序，或使用发行版中的对应程序：
+主控端使用 Controller 和 MCP 程序，被控端仅使用独立 Worker。可以从仓库构建或使用发行版：
 
 ```powershell
 go build -o AgentRelay.exe ./cmd/AgentRelay
 go build -ldflags "-H=windowsgui" -o AgentRelay-mcp.exe ./cmd/AgentRelay-mcp
+go build -o AgentRelay-worker.exe ./cmd/AgentRelay-worker
 ```
 
-1. 在主控电脑运行 `AgentRelay gui`，它会启动 Bridge、开启 LAN 发现并打开设备管理界面；也可以运行 `AgentRelay setup`，选择 `controller`。
-2. 在目标电脑运行 `AgentRelay setup`，选择 `worker`。选择发现到的主控端，指定 Workspace 目录和设备别名。
-3. 核对两台电脑显示的验证数字，然后在主控端终端批准请求。Worker 会保存凭据并自动重连。
-4. 后续启动时，主控运行 `AgentRelay bridge serve`，目标电脑运行 `AgentRelay worker serve`。Windows 下也可使用 `start-bridge.bat` 和 `start-worker.bat`。
+1. 主控电脑运行 `AgentRelay gui` 或 `AgentRelay setup` 打开设备管理；终端模式运行 `AgentRelay controller serve`。
+2. 被控电脑运行 `AgentRelay-worker setup`，选择发现到的主控端、工作区和设备别名。
+3. 核对两端显示的验证数字，在主控 GUI 或终端批准请求。Worker 保存凭据并自动重连。
+4. 后续被控端运行 `AgentRelay-worker serve`。Windows 也可使用 `start-controller.bat` 和 `start-worker.bat`。
 
-配对请求五分钟后过期，只有批准后才会创建设备和凭据。配对必须选择自动发现的主控端，以便 Worker 固定证书指纹；未验证的手动 URL 会被拒绝。
+配对请求五分钟后过期，批准后才创建设备和凭据。跨网段时，可在 Worker setup 中指定 `--controller`、经主控核对的 `--fingerprint`、`--workspace` 和 `--name`；不接受未固定证书的 URL。`scripts/build.ps1` 或 `sh scripts/build.sh` 可构建三种系统的 amd64/arm64 版本。macOS/Linux 程序名不带 `.exe`，MCP 构建不使用 Windows 专用链接参数。
 
 ## 接入 Agent
 
 无需部署 Worker 时，在 GUI 中选择“添加 SSH 连接”，填写配置后点击“测试”。SSH 首版支持命令执行和工作区文件读取；原生 Worker 提供增量同步、任务、持久会话和可选桌面能力。桌面操作取决于系统、交互会话及权限，不作为跨系统稳定能力保证。
 
-同一设备可保留 SSH 与 Worker 两种连接，通过“设为执行连接”明确选择。批准 Worker 配对时选择“附加到”已有设备（工作区须一致），Agent 始终只看到一个稳定设备句柄。详见[设备、连接和能力](docs/connections.md)。此次重构使用 schema 2 状态，旧状态直接拒绝；请使用新的 `AGENTRELAY_HOME`，重新配置或配对。
+同一设备可保留 SSH 与 Worker 连接，通过“设为执行连接”明确选择。每条连接独立配置工作区根目录、模式和映射，不要求根目录一致。批准 Worker 配对时可“附加到”已有设备，Agent 始终看到同一个稳定句柄。详见[设备、连接和能力](docs/connections.md)。主控状态和 Worker 凭据使用 schema 3，旧数据直接拒绝；请使用新的 `AGENTRELAY_HOME` 重新配置和配对，不保留旧命令或参数的兼容别名。
 
-在主控电脑以运行 Bridge 的同一用户执行：
+在主控电脑以运行 Controller 的同一用户执行：
 
 ```powershell
 AgentRelay mcp config
@@ -72,6 +73,8 @@ AgentRelay pull --device build-machine --out .\results <remote-root>\report.txt
 
 `device_list` 返回配对时生成且持久化的短句柄（如 `dev-a1b2c3d4`）、别名、在线状态和能力，不返回设备专有 ID。所有 Agent/CLI 操作的 `device_id` 参数仍然必填，但可以填写短句柄或别名；断线、重连、增删设备都不会改变短句柄。
 
+选中连接会暴露 `workspace_mode`：Worker 默认 `local_sync`，主控本地源码是同步源；SSH 默认 `remote`，远端仓库是源。两种模式均可不经同步直接执行。远端模式可直接运行 `AgentRelay exec --device linux-dev --dir /home/dev/repo "pwd"`，并禁用同步以保护远端源码。`--dir-kind local|remote|auto`（MCP 的 `working_dir_kind`）明确路径属于主控还是被控端。GUI 中的模式和映射均按连接配置。
+
 需要长期运行的 Shell 进程时使用会话：
 
 ```powershell
@@ -81,7 +84,7 @@ AgentRelay session get --device <id> --id <session-id>
 AgentRelay session close --device <id> --id <session-id>
 ```
 
-远端路径都相对于 Worker 授权的 Workspace。`sync` 通过 SHA-256 manifest 比较差异，并以固定大小的分块上传变化文件，因此目录和单文件不再受 32 MiB RPC 载荷上限约束。默认应用嵌套的 `.gitignore` 和根目录 `.agentrelayignore`；可重复使用 `--exclude` 添加 gitignore 兼容规则，或用 `--no-gitignore` 关闭 `.gitignore`。`--mode update` 保留远端额外文件，`--mode mirror` 只删除此前由同步管理、但本地已不存在的文件；`--dry-run` 只返回计划。同步成功后会持久化本地项目到远端目录的映射，后续命令可以继续使用同一个本地项目目录。任务和会话只保存在内存中，Worker 进程重启后不会恢复。
+远端路径按选中连接的授权根目录检查，根目录内的远端绝对路径会转换为相对路径。`local_sync` 模式下，`sync` 通过 SHA-256 manifest 比较差异并分块上传变化文件，目录和单文件不受 32 MiB RPC 载荷上限约束。默认应用嵌套的 `.gitignore` 和根目录 `.agentrelayignore`；可重复使用 `--exclude` 添加规则，或用 `--no-gitignore` 关闭 `.gitignore`。`--mode update` 保留远端额外文件，`--mode mirror` 只删除此前由同步管理、但本地已不存在的文件；`--dry-run` 只返回计划。同步成功后，在该连接上持久化本地项目到远端目录的映射，后续命令可以使用同一个本地目录。任务和会话保存在内存中，Worker 进程重启后不会恢复。
 
 无需重新配对即可管理授权：
 

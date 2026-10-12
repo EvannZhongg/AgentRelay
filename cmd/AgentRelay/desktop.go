@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"AgentRelay/internal/bridge"
+	"AgentRelay/internal/controller"
 	"AgentRelay/internal/protocol"
 )
 
@@ -18,7 +18,7 @@ func desktopCommand(args []string) error {
 		return errors.New("usage: AgentRelay desktop info|capture|input --device <id> [--json <object>]")
 	}
 	f := flag.NewFlagSet("desktop", flag.ContinueOnError)
-	base := f.String("bridge", bridge.DefaultURL, "bridge URL")
+	base := f.String("controller", controller.DefaultURL, "controller URL")
 	id := f.String("device", "", "paired device ID")
 	display := f.Int("display", 0, "display index for capture")
 	width := f.Int("max-width", 1600, "preview maximum width")
@@ -30,7 +30,7 @@ func desktopCommand(args []string) error {
 	if *id == "" {
 		return errors.New("--device is required")
 	}
-	c := bridge.NewClient(*base)
+	c := controller.NewClient(*base)
 	timeout := 30 * time.Second
 	if args[0] == "capture" {
 		timeout = 90 * time.Second

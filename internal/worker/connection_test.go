@@ -61,9 +61,9 @@ func TestRetryHTTPDoesNotRetryPinnedCertificateErrors(t *testing.T) {
 	attempts := 0
 	_, err := retryHTTP(context.Background(), func() (*http.Response, error) {
 		attempts++
-		return nil, transport.ErrBridgeCertificateMismatch
+		return nil, transport.ErrControllerCertificateMismatch
 	})
-	if !errors.Is(err, transport.ErrBridgeCertificateMismatch) {
+	if !errors.Is(err, transport.ErrControllerCertificateMismatch) {
 		t.Fatalf("error = %v", err)
 	}
 	if attempts != 1 {

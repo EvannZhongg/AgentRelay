@@ -1,14 +1,13 @@
-package bridge_test
+package controller_test
 
 import (
+	"AgentRelay/internal/filesync"
+	"AgentRelay/internal/protocol"
+	"AgentRelay/internal/testutil"
 	"context"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"AgentRelay/internal/filesync"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/testutil"
 )
 
 func TestIncrementalChunkedSyncIgnoreAndMirror(t *testing.T) {

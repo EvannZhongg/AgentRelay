@@ -11,19 +11,19 @@ import (
 	"path/filepath"
 	"strings"
 
-	"AgentRelay/internal/bridge"
+	"AgentRelay/internal/controller"
 	"AgentRelay/internal/protocol"
 )
 
 func publicDevices(devices []protocol.Device) []map[string]any {
-	devices = bridge.SortDevices(devices)
+	devices = controller.SortDevices(devices)
 	out := make([]map[string]any, 0, len(devices))
 	for _, d := range devices {
 		selector := d.Handle
 		if selector == "" {
 			selector = d.Name
 		}
-		out = append(out, map[string]any{"device": selector, "handle": d.Handle, "alias": d.Name, "online": d.Online, "authorized": d.Authorized, "desktop_access": d.DesktopAccess, "os": d.OS, "architecture": d.Architecture, "workspace": d.Workspace, "workspace_mappings": d.Mappings, "capabilities": d.Capabilities, "last_seen": d.LastSeen})
+		out = append(out, map[string]any{"device": selector, "handle": d.Handle, "alias": d.Name, "online": d.Online, "authorized": d.Authorized, "desktop_access": d.DesktopAccess, "os": d.OS, "architecture": d.Architecture, "workspace": d.Workspace, "workspace_mode": d.WorkspaceMode, "workspace_mappings": d.Mappings, "capabilities": d.Capabilities, "last_seen": d.LastSeen})
 	}
 	return out
 }
@@ -40,10 +40,8 @@ func main() {
 	switch os.Args[1] {
 	case "setup":
 		err = setupCommand(os.Args[2:])
-	case "worker":
-		err = workerCommand(os.Args[2:])
-	case "bridge":
-		err = bridgeCommand(os.Args[2:])
+	case "controller":
+		err = controllerCommand(os.Args[2:])
 	case "gui":
 		err = guiCommand(os.Args[2:])
 	case "device":
@@ -74,13 +72,13 @@ func main() {
 	}
 }
 
-func client(args []string) (*bridge.Client, context.Context, error) {
+func client(args []string) (*controller.Client, context.Context, error) {
 	f := flag.NewFlagSet("client", flag.ContinueOnError)
-	base := f.String("bridge", bridge.DefaultURL, "bridge URL")
+	base := f.String("controller", controller.DefaultURL, "controller URL")
 	if err := f.Parse(args); err != nil {
 		return nil, nil, err
 	}
-	return bridge.NewClient(*base), context.Background(), nil
+	return controller.NewClient(*base), context.Background(), nil
 }
 func deviceCommand(args []string) error {
 	if len(args) == 0 {
@@ -99,7 +97,7 @@ func deviceCommand(args []string) error {
 		return printJSON(publicDevices(out))
 	case "rename", "authorize", "revoke", "remove":
 		f := flag.NewFlagSet("device", flag.ContinueOnError)
-		base := f.String("bridge", bridge.DefaultURL, "bridge URL")
+		base := f.String("controller", controller.DefaultURL, "controller URL")
 		id := f.String("device", "", "device ID")
 		name := f.String("name", "", "device alias")
 		if err := f.Parse(args[1:]); err != nil {
@@ -108,11 +106,11 @@ func deviceCommand(args []string) error {
 		if *id == "" {
 			return errors.New("--device is required")
 		}
-		c := bridge.NewClient(*base)
+		c := controller.NewClient(*base)
 		if args[0] == "remove" {
 			return c.Do(context.Background(), "DELETE", "/v1/devices/"+url.PathEscape(*id), nil, nil)
 		}
-		update := bridge.DeviceUpdate{}
+		update := controller.DeviceUpdate{}
 		if args[0] == "rename" {
 			update.Name = name
 		} else {
@@ -130,9 +128,10 @@ func deviceCommand(args []string) error {
 }
 func execCommand(args []string) error {
 	f := flag.NewFlagSet("exec", flag.ContinueOnError)
-	base := f.String("bridge", bridge.DefaultURL, "bridge URL")
+	base := f.String("controller", controller.DefaultURL, "controller URL")
 	id := f.String("device", "", "device ID")
-	dir := f.String("dir", "", "workspace-relative directory")
+	dir := f.String("dir", "", "directory in the selected workspace")
+	dirKind := f.String("dir-kind", "auto", "directory interpretation: auto, local or remote")
 	timeout := f.Int64("timeout-ms", 0, "timeout")
 	var env environmentFlags
 	f.Var(&env, "env", "environment override KEY=VALUE (repeatable)")
@@ -142,7 +141,7 @@ func execCommand(args []string) error {
 	if *id == "" || f.NArg() == 0 {
 		return errors.New("usage: AgentRelay exec --device <id> [--dir <path>] <command>")
 	}
-	result, err := bridge.NewClient(*base).Exec(context.Background(), *id, protocol.ExecRequest{Command: strings.Join(f.Args(), " "), WorkingDir: *dir, TimeoutMS: *timeout, Env: env})
+	result, err := controller.NewClient(*base).Exec(context.Background(), *id, protocol.ExecRequest{Command: strings.Join(f.Args(), " "), WorkingDir: *dir, WorkingDirKind: *dirKind, TimeoutMS: *timeout, Env: env})
 	if err != nil {
 		return err
 	}
@@ -153,17 +152,18 @@ func taskCommand(args []string) error {
 		return errors.New("usage: AgentRelay task start|list|get|retrieve|cancel")
 	}
 	f := flag.NewFlagSet("task", flag.ContinueOnError)
-	base := f.String("bridge", bridge.DefaultURL, "bridge URL")
+	base := f.String("controller", controller.DefaultURL, "controller URL")
 	id := f.String("device", "", "device ID")
 	taskID := f.String("id", "", "task ID")
-	dir := f.String("dir", "", "workspace-relative directory for start")
+	dir := f.String("dir", "", "directory for start")
+	dirKind := f.String("dir-kind", "auto", "directory interpretation: auto, local or remote")
 	timeout := f.Int64("timeout-ms", 0, "execution timeout for start")
 	var env environmentFlags
 	f.Var(&env, "env", "environment override KEY=VALUE (repeatable)")
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
-	c := bridge.NewClient(*base)
+	c := controller.NewClient(*base)
 	if *id == "" {
 		return errors.New("--device is required")
 	}
@@ -172,7 +172,7 @@ func taskCommand(args []string) error {
 		if f.NArg() == 0 {
 			return errors.New("task start requires a command")
 		}
-		task, err := c.StartTask(context.Background(), *id, protocol.TaskRequest{ExecRequest: protocol.ExecRequest{Command: strings.Join(f.Args(), " "), WorkingDir: *dir, Env: env, TimeoutMS: *timeout}})
+		task, err := c.StartTask(context.Background(), *id, protocol.TaskRequest{ExecRequest: protocol.ExecRequest{Command: strings.Join(f.Args(), " "), WorkingDir: *dir, WorkingDirKind: *dirKind, Env: env, TimeoutMS: *timeout}})
 		if err != nil {
 			return err
 		}
@@ -219,10 +219,10 @@ type mcpConfig struct {
 
 func mcpCommand(args []string) error {
 	if len(args) == 0 || args[0] != "config" {
-		return errors.New("usage: AgentRelay mcp config [--bridge <url>] [--command <path>] [--name <server-name>]")
+		return errors.New("usage: AgentRelay mcp config [--controller <url>] [--command <path>] [--name <server-name>]")
 	}
 	f := flag.NewFlagSet("mcp config", flag.ContinueOnError)
-	base := f.String("bridge", bridge.DefaultURL, "Bridge URL")
+	base := f.String("controller", controller.DefaultURL, "Controller URL")
 	command := f.String("command", defaultMCPCommand(), "MCP server executable")
 	name := f.String("name", "agent-relay", "MCP server name")
 	if err := f.Parse(args[1:]); err != nil {
@@ -231,7 +231,7 @@ func mcpCommand(args []string) error {
 	if strings.TrimSpace(*name) == "" {
 		return errors.New("--name cannot be empty")
 	}
-	config := mcpConfig{Servers: map[string]mcpServerConfig{*name: {Command: *command, Args: []string{"--bridge", *base}}}}
+	config := mcpConfig{Servers: map[string]mcpServerConfig{*name: {Command: *command, Args: []string{"--controller", *base}}}}
 	return printJSON(config)
 }
 
@@ -262,5 +262,5 @@ func printJSON(v any) error {
 }
 func usage() {
 	fmt.Println("Connection management: AgentRelay connection add-ssh|list|test|select|remove|attach-worker")
-	fmt.Println("AgentRelay\n\nUsage:\n  AgentRelay setup\n  AgentRelay bridge serve\n  AgentRelay gui\n  AgentRelay worker setup|serve\n  AgentRelay device list|rename|authorize|revoke|remove\n  AgentRelay exec --device <alias|handle> [--dir <local-project-or-remote-path>] <command>\n  AgentRelay task start|list|get|retrieve|cancel --device <alias|handle> [--id <task-id>]\n  AgentRelay sync --device <alias|handle> --source <dir> [--mode update|mirror] [--dry-run]\n  AgentRelay pull --device <alias|handle> [--out <local-dir>] <remote-path>...\n  AgentRelay session create|list|get|send|close --device <alias|handle> [--id <session-id>]\n  AgentRelay desktop info|capture|input --device <alias|handle> [--json <object>]\n  AgentRelay mcp config")
+	fmt.Println("AgentRelay\n\nUsage:\n  AgentRelay setup\n  AgentRelay controller serve\n  AgentRelay gui\n  AgentRelay device list|rename|authorize|revoke|remove\n  AgentRelay exec --device <alias|handle> [--dir <local-project-or-remote-path>] <command>\n  AgentRelay task start|list|get|retrieve|cancel --device <alias|handle> [--id <task-id>]\n  AgentRelay sync --device <alias|handle> --source <dir> [--mode update|mirror] [--dry-run]\n  AgentRelay pull --device <alias|handle> [--out <local-dir>] <remote-path>...\n  AgentRelay session create|list|get|send|close --device <alias|handle> [--id <session-id>]\n  AgentRelay desktop info|capture|input --device <alias|handle> [--json <object>]\n  AgentRelay mcp config")
 }

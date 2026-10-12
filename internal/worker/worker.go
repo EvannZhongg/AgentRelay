@@ -23,10 +23,11 @@ import (
 )
 
 type Config struct {
-	Desktop   desktop.Backend
-	Workspace string
-	Name      string
-	DeviceID  string
+	Desktop       desktop.Backend
+	Workspace     string
+	WorkspaceMode string
+	Name          string
+	DeviceID      string
 }
 
 type Server struct {
@@ -41,6 +42,12 @@ type Server struct {
 func New(cfg Config) (*Server, error) {
 	if cfg.Workspace == "" {
 		return nil, errors.New("workspace is required")
+	}
+	if cfg.WorkspaceMode == "" {
+		cfg.WorkspaceMode = protocol.WorkspaceLocalSync
+	}
+	if cfg.WorkspaceMode != protocol.WorkspaceLocalSync && cfg.WorkspaceMode != protocol.WorkspaceRemote {
+		return nil, errors.New("workspace mode must be local_sync or remote")
 	}
 	root, err := filepath.Abs(cfg.Workspace)
 	if err != nil {
@@ -69,7 +76,7 @@ func (s *Server) Device() protocol.Device {
 		}
 	}
 	return protocol.Device{
-		ID: s.cfg.DeviceID, Name: s.cfg.Name, OS: runtime.GOOS, Workspace: s.cfg.Workspace,
+		ID: s.cfg.DeviceID, Name: s.cfg.Name, OS: runtime.GOOS, Workspace: s.cfg.Workspace, WorkspaceMode: s.cfg.WorkspaceMode,
 		Architecture: runtime.GOARCH, Capabilities: protocol.Capabilities{Desktop: capability, Exec: true, Files: true, Sync: true, Tasks: true, Sessions: true, Shells: []string{nativeShell}, MaxPayload: 32 << 20},
 		Metadata: map[string]string{"hostname": host, "workspace": s.cfg.Workspace}, LastSeen: time.Now(), Online: true,
 	}
@@ -185,7 +192,7 @@ func (s *Server) run(parent context.Context, req protocol.ExecRequest) (*protoco
 	cmd := shellCommand(ctx, req.Command, false)
 	cmd.WaitDelay = 2 * time.Second
 	cmd.Dir = workDir
-	cmd.Env = os.Environ()
+	cmd.Env = cmd.Environ()
 	for k, v := range req.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}

@@ -115,7 +115,7 @@ func (s *sessionStore) start(workspace string, req protocol.SessionRequest) (pro
 	}
 	cmd := shellCommand(context.Background(), req.Command, true)
 	cmd.Dir = workDir
-	cmd.Env = os.Environ()
+	cmd.Env = cmd.Environ()
 	for key, value := range req.Env {
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}

@@ -7,7 +7,7 @@ import (
 )
 
 func TestMCPConfig(t *testing.T) {
-	config := mcpConfig{Servers: map[string]mcpServerConfig{"agent-relay": {Command: "AgentRelay-mcp", Args: []string{"--bridge", "https://localhost:8764"}}}}
+	config := mcpConfig{Servers: map[string]mcpServerConfig{"agent-relay": {Command: "AgentRelay-mcp", Args: []string{"--controller", "https://localhost:8764"}}}}
 	data, err := json.Marshal(config)
 	if err != nil {
 		t.Fatal(err)

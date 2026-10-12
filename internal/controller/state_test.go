@@ -1,8 +1,9 @@
-package bridge
+package controller
 
 import (
 	"AgentRelay/internal/protocol"
 	"AgentRelay/internal/state"
+	"AgentRelay/internal/workspace"
 	"bytes"
 	"encoding/json"
 	"net/http/httptest"
@@ -13,8 +14,8 @@ import (
 )
 
 func TestMissingDeviceHandlesAreRejected(t *testing.T) {
-	filename := filepath.Join(t.TempDir(), "bridge.json")
-	initial := registry{Schema: 2, Devices: map[string]record{
+	filename := filepath.Join(t.TempDir(), "controller.json")
+	initial := registry{Schema: 3, Devices: map[string]record{
 		"private-id": {Device: protocol.Device{ID: "private-id", Name: "laptop", Workspace: t.TempDir()}},
 	}}
 	data, err := json.Marshal(initial)
@@ -37,7 +38,7 @@ func TestMissingDeviceHandlesAreRejected(t *testing.T) {
 }
 
 func TestExpiredPairingCannotCreateDevice(t *testing.T) {
-	s, err := New(Config{StatePath: filepath.Join(t.TempDir(), "bridge.json")})
+	s, err := New(Config{StatePath: filepath.Join(t.TempDir(), "controller.json")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +61,7 @@ func TestExpiredPairingCannotCreateDevice(t *testing.T) {
 }
 
 func TestPairingNeedsControllerApproval(t *testing.T) {
-	s, err := New(Config{StatePath: filepath.Join(t.TempDir(), "bridge.json")})
+	s, err := New(Config{StatePath: filepath.Join(t.TempDir(), "controller.json")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +115,7 @@ func TestPairingNeedsControllerApproval(t *testing.T) {
 	}
 }
 func TestCorruptStateIsReported(t *testing.T) {
-	filename := filepath.Join(t.TempDir(), "bridge.json")
+	filename := filepath.Join(t.TempDir(), "controller.json")
 	if err := os.WriteFile(filename, []byte("{"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -130,14 +131,14 @@ func TestMappingValidationAndLongestMatch(t *testing.T) {
 	local := t.TempDir()
 	child := filepath.Join(local, "sub")
 	mappings := map[string]string{local: "projects/parent", child: "projects/child"}
-	if mapped, ok := mappedDir(mappings, filepath.Join(child, "tests")); !ok || mapped != "projects/child/tests" {
+	if mapped, ok := workspace.Mapped(mappings, filepath.Join(child, "tests")); !ok || mapped != "projects/child/tests" {
 		t.Fatalf("mapped=%q found=%v", mapped, ok)
 	}
-	if _, ok := mappedDir(mappings, local+"-other"); ok {
+	if _, ok := workspace.Mapped(mappings, local+"-other"); ok {
 		t.Fatal("matched unrelated path prefix")
 	}
 	for _, remote := range []string{"../outside", "sub/../../outside", "C:\\outside", "/outside", "\\\\server\\share"} {
-		if validRemote(remote) {
+		if workspace.Relative(remote) {
 			t.Fatalf("unsafe remote mapping accepted: %q", remote)
 		}
 	}

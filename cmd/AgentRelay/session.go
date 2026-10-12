@@ -10,7 +10,7 @@ import (
 	"os"
 	"strings"
 
-	"AgentRelay/internal/bridge"
+	"AgentRelay/internal/controller"
 	"AgentRelay/internal/protocol"
 )
 
@@ -34,10 +34,11 @@ func sessionCommand(args []string) error {
 		return errors.New("usage: AgentRelay session create|list|get|send|close")
 	}
 	f := flag.NewFlagSet("session", flag.ContinueOnError)
-	base := f.String("bridge", bridge.DefaultURL, "bridge URL")
+	base := f.String("controller", controller.DefaultURL, "controller URL")
 	id := f.String("device", "", "device ID")
 	sessionID := f.String("id", "", "session ID")
-	dir := f.String("dir", "", "workspace-relative directory for create")
+	dir := f.String("dir", "", "directory for create")
+	dirKind := f.String("dir-kind", "auto", "directory interpretation: auto, local or remote")
 	input := f.String("input", "", "exact stdin text for send, including newlines")
 	inputFile := f.String("input-file", "", "read input from a file, or - for stdin")
 	var env environmentFlags
@@ -48,10 +49,10 @@ func sessionCommand(args []string) error {
 	if *id == "" {
 		return errors.New("--device is required")
 	}
-	c, ctx := bridge.NewClient(*base), context.Background()
+	c, ctx := controller.NewClient(*base), context.Background()
 	switch args[0] {
 	case "create":
-		session, err := c.CreateSession(ctx, *id, protocol.SessionRequest{Command: strings.Join(f.Args(), " "), WorkingDir: *dir, Env: env})
+		session, err := c.CreateSession(ctx, *id, protocol.SessionRequest{Command: strings.Join(f.Args(), " "), WorkingDir: *dir, WorkingDirKind: *dirKind, Env: env})
 		if err != nil {
 			return err
 		}
