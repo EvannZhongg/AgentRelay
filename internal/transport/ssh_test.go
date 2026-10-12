@@ -13,21 +13,13 @@ func TestSSHRejectsUnsafeConfigurationBeforeLaunching(t *testing.T) {
 	for _, host := range []string{"-oProxyCommand=bad", "host name", "user@host", "host\nother"} {
 		c := valid
 		c.Host = host
-		if _, err := (SSH{Config: c, Workspace: "/work"}).Call(context.Background(), Request{}); err == nil {
+		if _, err := (SSH{Config: c}).Run(context.Background(), "echo test", nil); err == nil {
 			t.Fatalf("accepted host: %q", host)
 		}
 	}
-	for _, root := range []string{"work", "C:\\work", "/work\x00"} {
-		if err := ValidateSSH(valid, root); err == nil {
-			t.Fatalf("accepted workspace %q", root)
-		}
-	}
-	if err := ValidateSSH(valid, "/work space/'quoted'"); err != nil {
-		t.Fatal(err)
-	}
-	args := (SSH{Config: valid, Workspace: "/work"}).args()
+	args := (SSH{Config: valid}).args("native-bootstrap")
 	joined := strings.Join(args, " ")
-	for _, required := range []string{"BatchMode=yes", "StrictHostKeyChecking=yes", "-F none", "python3 -u"} {
+	for _, required := range []string{"BatchMode=yes", "StrictHostKeyChecking=yes", "-F none", "native-bootstrap"} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("missing %s", required)
 		}

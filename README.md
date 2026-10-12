@@ -9,7 +9,7 @@ Coding agent -- MCP stdio / CLI --> Controller (HTTPS)
                                       | selected device connection
                         +-------------+-------------+
                         |                           |
-                  SSH + Python 3             Native Worker (WSS)
+                  SSH + native shell         Native Worker (WSS)
                   shell / file reads         shell / files / tasks
                                              sessions / desktop
 ```
@@ -19,7 +19,7 @@ The Worker opens no inbound port. LAN, Ethernet and future IP-over-USB connectio
 ## What You Need
 
 - A Windows, macOS or Linux controller running the coding agent and AgentRelay Controller.
-- A target computer with a workspace directory and either SSH + Python 3 (POSIX targets) or the native AgentRelay Worker.
+- A Windows, macOS or Linux target with a workspace directory and either SSH + native system shell/tools or the native AgentRelay Worker. SSH needs no Python or additional language runtime; see [requirements](docs/ssh.md).
 - Network reachability from the Worker to the controller. The controller accepts inbound TCP `8764`; discovery uses UDP `8763`.
 - Worker targets run one native executable and need no Python, Node.js, LLM or Agent Runtime. macOS desktop access needs Screen Recording and Accessibility permissions; Linux desktop is currently unsupported.
 

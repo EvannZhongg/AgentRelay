@@ -9,7 +9,7 @@ Coding Agent -- MCP stdio / CLI --> Controller（主控端，HTTPS）
                                       | 设备的执行连接
                         +-------------+-------------+
                         |                           |
-                  SSH + Python 3             原生 Worker（WSS）
+                  SSH + 原生 Shell           原生 Worker（WSS）
                   Shell / 文件读取           Shell / 文件 / 任务
                                              会话 / 桌面
 ```
@@ -19,7 +19,7 @@ Worker 不开放入站端口。局域网、网线以及未来的 USB IP 网络�
 ## 使用条件
 
 - 一台运行 Coding Agent 和 AgentRelay Controller 的 Windows、macOS 或 Linux 主控电脑。
-- 一台提供 Workspace 目录的目标电脑，可使用 SSH + Python 3（POSIX 系统）或原生 AgentRelay Worker。
+- 一台 Windows、macOS 或 Linux 被控电脑，提供工作区目录，可使用 SSH + 系统原生 Shell/工具，或原生 AgentRelay Worker。SSH 无需 Python 等额外语言运行时；详见[原生 SSH 执行器](docs/ssh.md)。
 - Worker 能访问主控电脑；主控默认接收 TCP `8764`，局域网发现使用 UDP `8763`。
 - Worker 被控端仅运行一个原生可执行文件，不需要 Python、Node.js、LLM 或 Agent Runtime。macOS 桌面能力需要“屏幕录制”和“辅助功能”权限；Linux 暂不提供桌面操作。
 

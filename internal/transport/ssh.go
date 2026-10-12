@@ -3,24 +3,19 @@ package transport
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"AgentRelay/internal/protocol"
 )
 
-type SSH struct {
-	Config    protocol.SSHConfig
-	Workspace string
-	Program   string
-}
+type SSH struct{ Config protocol.SSHConfig }
 
-func ValidateSSH(c protocol.SSHConfig, workspace string) error {
+func ValidateSSH(c protocol.SSHConfig) error {
 	if c.Host == "" || strings.HasPrefix(c.Host, "-") || strings.ContainsAny(c.Host, " \t\r\n/@\\") {
 		return errors.New("SSH host must be a hostname or IP address")
 	}
@@ -30,9 +25,6 @@ func ValidateSSH(c protocol.SSHConfig, workspace string) error {
 	if c.Port < 1 || c.Port > 65535 {
 		return errors.New("SSH port must be between 1 and 65535")
 	}
-	if !strings.HasPrefix(workspace, "/") || strings.ContainsRune(workspace, '\x00') {
-		return errors.New("SSH workspace must be an absolute POSIX path")
-	}
 	for _, p := range []string{c.IdentityFile, c.KnownHostsFile} {
 		if strings.ContainsAny(p, "\r\n\x00") {
 			return errors.New("invalid SSH authentication path")
@@ -41,7 +33,7 @@ func ValidateSSH(c protocol.SSHConfig, workspace string) error {
 	return nil
 }
 
-func (s SSH) args() []string {
+func (s SSH) args(command string) []string {
 	a := []string{"-F", "none", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2", "-p", strconv.Itoa(s.Config.Port), "-l", s.Config.User}
 	if s.Config.IdentityFile != "" {
 		a = append(a, "-i", s.Config.IdentityFile)
@@ -49,7 +41,6 @@ func (s SSH) args() []string {
 	if s.Config.KnownHostsFile != "" {
 		a = append(a, "-o", "UserKnownHostsFile=\""+strings.ReplaceAll(strings.ReplaceAll(s.Config.KnownHostsFile, "\\", "/"), "\"", "\\\"")+"\"")
 	}
-	command := "python3 -u -c 'import base64;exec(base64.b64decode(\"" + base64.StdEncoding.EncodeToString([]byte(s.Program)) + "\"))'"
 	return append(a, s.Config.Host, command)
 }
 
@@ -70,57 +61,47 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// Call sends one RPC over an SSH channel. The Python standard-library helper
-// exists only in memory for this invocation; no Worker or listener is installed.
-func (s SSH) Call(ctx context.Context, req Request) (Response, error) {
-	if err := ValidateSSH(s.Config, s.Workspace); err != nil {
-		return Response{}, err
+// Run carries opaque native executor input/output over one OpenSSH channel.
+// Keep stdin open until completion so the executor observes channel loss.
+func (s SSH) Run(ctx context.Context, command string, input []byte) ([]byte, error) {
+	if err := ValidateSSH(s.Config); err != nil {
+		return nil, err
 	}
-	if s.Program == "" {
-		return Response{}, errors.New("SSH RPC executor program is required")
+	if command == "" {
+		return nil, errors.New("SSH remote command is required")
 	}
-	if len(req.Body) > 32<<20 {
-		return Response{}, errors.New("RPC payload exceeds 32 MiB")
+	if len(input) > 48<<20 {
+		return nil, errors.New("SSH input exceeds 48 MiB")
 	}
-	input, err := json.Marshal(struct {
-		Workspace string  `json:"workspace"`
-		Request   Request `json:"request"`
-	}{s.Workspace, req})
-	if err != nil {
-		return Response{}, err
-	}
-	cmd := exec.CommandContext(ctx, "ssh", s.args()...)
+	cmd := exec.CommandContext(ctx, "ssh", s.args(command)...)
+	cmd.WaitDelay = 2 * time.Second
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return Response{}, err
+		return nil, err
 	}
 	defer stdin.Close()
 	stdout := &boundedBuffer{limit: 32 << 20}
 	stderr := &boundedBuffer{limit: 64 << 10}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if err = cmd.Start(); err != nil {
-		return Response{}, fmt.Errorf("start OpenSSH: %w", err)
+		return nil, fmt.Errorf("start OpenSSH: %w", err)
 	}
-	_, writeErr := stdin.Write(append(input, '\n'))
+	_, writeErr := stdin.Write(input)
 	if writeErr != nil {
 		_ = cmd.Process.Kill()
 	}
 	err = cmd.Wait()
 	if ctx.Err() != nil {
-		return Response{}, ctx.Err()
+		return nil, ctx.Err()
 	}
 	if writeErr != nil {
-		return Response{}, writeErr
+		return nil, fmt.Errorf("SSH input failed: %w: %s", writeErr, strings.TrimSpace(stderr.String()))
 	}
 	if err != nil {
-		return Response{}, fmt.Errorf("SSH RPC failed: %w: %s", err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("SSH executor failed: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	if stdout.overflow {
-		return Response{}, errors.New("SSH response exceeds 32 MiB")
+		return nil, errors.New("SSH response exceeds 32 MiB")
 	}
-	var out Response
-	if err = json.Unmarshal(stdout.Bytes(), &out); err != nil || out.Status < 100 || out.Status > 599 {
-		return Response{}, errors.New("invalid SSH RPC response; remote requires Python 3 and a POSIX shell")
-	}
-	return out, nil
+	return stdout.Bytes(), nil
 }

@@ -19,7 +19,8 @@ func connectionCommand(args []string) error {
 	device := f.String("device", "", "device handle or alias; omit for a new SSH device")
 	id := f.String("id", "", "connection ID or pairing ID for attach-worker")
 	name := f.String("name", "", "new device alias")
-	root := f.String("workspace", "", "existing absolute POSIX workspace")
+	root := f.String("workspace", "", "existing absolute target workspace (POSIX, drive or UNC path)")
+	platform := f.String("platform", "auto", "SSH target executor: auto, windows or posix")
 	mode := f.String("workspace-mode", protocol.WorkspaceRemote, "workspace mode: remote or local_sync")
 	host := f.String("host", "", "SSH hostname or IP")
 	user := f.String("user", "", "SSH user")
@@ -31,7 +32,7 @@ func connectionCommand(args []string) error {
 	}
 	c, ctx := controller.NewClient(*base), context.Background()
 	if args[0] == "add-ssh" {
-		ssh := protocol.SSHConfig{Host: *host, User: *user, Port: *port, IdentityFile: *key, KnownHostsFile: *known}
+		ssh := protocol.SSHConfig{Platform: *platform, Host: *host, User: *user, Port: *port, IdentityFile: *key, KnownHostsFile: *known}
 		spec := protocol.ConnectionSpec{Kind: "ssh", SSH: &ssh, Workspace: protocol.WorkspacePolicy{Root: *root, Mode: *mode}}
 		if *device == "" {
 			out, err := c.CreateDevice(ctx, protocol.DeviceCreate{Name: *name, Connection: spec})

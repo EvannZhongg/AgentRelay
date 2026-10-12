@@ -33,10 +33,11 @@ func (SSH) Validate(c protocol.ConnectionSpec) error {
 	if c.SSH == nil {
 		return errors.New("SSH configuration is required")
 	}
-	return transport.ValidateSSH(*c.SSH, c.Workspace.Root)
+	return backend.ValidateSSH(*c.SSH, c.Workspace.Root)
 }
 func (SSH) Capabilities() protocol.Capabilities {
-	return protocol.Capabilities{Exec: true, Files: true, Shells: []string{"sh"}, MaxPayload: 32 << 20}
+	// The probe reports the actual target shell; it is unknown before testing.
+	return protocol.Capabilities{Exec: true, Files: true, MaxPayload: 32 << 20}
 }
 func (SSH) Bind(c protocol.Connection, _ backend.Call) (backend.Call, error) {
 	if c.SSH == nil {

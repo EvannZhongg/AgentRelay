@@ -83,7 +83,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#8d97a2;box-sh
           <div class="f"><label for="ssh-mode">工作区模式</label><select id="ssh-mode"><option value="remote">远端仓库</option><option value="local_sync">本地源码同步（需要连接支持同步）</option></select></div>
         </div>
         <div id="ssh-fields"></div>
-        <p class="hint">SSH 首版要求远端为 POSIX 系统，已安装 Python 3，工作区已存在。控制端使用 OpenSSH 密钥或 ssh-agent，主机公钥须预先加入 known_hosts。</p>
+        <p class="hint">Windows 使用系统 PowerShell，macOS/Linux 使用原生 sh 和系统工具，无需 Python 或 AgentRelay 程序。工作区须已存在。主控使用 OpenSSH 密钥或 ssh-agent，主机公钥须预先加入 known_hosts。</p>
         <button class="primary" type="submit">添加连接</button>
       </form>
     </details>
@@ -196,6 +196,7 @@ function capabilities(c = {}) {
 }
 function sshFields(c = {}) {
   return `<div class="fields">
+    <div class="f"><label>被控端平台</label><select data-ssh="platform">${[['auto','自动（依据远端路径）'],['windows','Windows / PowerShell'],['posix','macOS、Linux / sh']].map(([key,label]) => `<option value="${key}" ${(c.platform || 'auto') === key ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
     ${[['host','主机',c.host || ''],['port','端口',c.port || 22],['user','用户',c.user || ''],['identity_file','密钥文件',c.identity_file || ''],['known_hosts_file','known_hosts 文件',c.known_hosts_file || '']].map(([key,label,value]) => `<div class="f"><label>${label}</label><input aria-label="${label}" data-ssh="${key}" value="${esc(value)}" ${['host','port','user'].includes(key) ? 'required' : ''} ${key === 'port' ? 'type="number" min="1" max="65535"' : ''}></div>`).join('')}
   </div>`;
 }

@@ -47,6 +47,7 @@ Tests select native PowerShell/POSIX commands explicitly. Windows and Linux/WSL 
 - Source authority is per connection: local_sync uses Controller source mappings; remote uses the target repository. Neither requires sync before executing. Never share mappings between connections or use Controller OS rules to parse target absolute paths.
 - Keep device operation routing independent of transport kinds. New adapters implement internal/connection.Adapter and register through Controller Config.Adapters; MCP tools stay unchanged.
 - Keep Controller/SSH/source-scanner packages out of the standalone Worker dependency graph.
+- SSH transport carries opaque bytes; keep native script generation, workspace checks and result framing in internal/backend. Native executor tests must use target-platform commands and require no Python. See [SSH executor verification](ssh.md).
 
 ## Adding A Remote Operation
 

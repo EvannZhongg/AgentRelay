@@ -25,6 +25,7 @@ type Connection struct {
 
 // SSH uses the controller's OpenSSH key/agent authentication and known_hosts.
 type SSHConfig struct {
+	Platform       string `json:"platform,omitempty"`
 	Host           string `json:"host"`
 	Port           int    `json:"port"`
 	User           string `json:"user"`

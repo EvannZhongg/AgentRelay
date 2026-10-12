@@ -1,6 +1,7 @@
 package controller_test
 
 import (
+	"AgentRelay/internal/backend"
 	"AgentRelay/internal/controller"
 	"AgentRelay/internal/protocol"
 	"AgentRelay/internal/state"
@@ -25,6 +26,19 @@ func TestSSHIntegration(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &in); err != nil {
 		t.Fatal(err)
 	}
+	if in.Connection.SSH == nil {
+		t.Fatal("SSH configuration is required")
+	}
+	platform, err := backend.SSHPlatform(*in.Connection.SSH, in.Connection.Workspace.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := func(windows, posix string) string {
+		if platform == "windows" {
+			return windows
+		}
+		return posix
+	}
 	t.Setenv("AGENTRELAY_HOME", t.TempDir())
 	s, err := controller.New(controller.Config{StatePath: state.Path("controller")})
 	if err != nil {
@@ -46,15 +60,15 @@ func TestSSHIntegration(t *testing.T) {
 	if _, err = c.TestConnection(ctx, d.ID, d.ActiveConnection); err != nil {
 		t.Fatal(err)
 	}
-	result, err := c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: "printf '%s' \"$RELAY_TEST\"; printf error >&2; exit 7", Env: map[string]string{"RELAY_TEST": "SSH 'quoted' value"}})
+	result, err := c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: native("[Console]::Write($env:RELAY_TEST); [Console]::Error.Write('error'); exit 7", "printf '%s' \"$RELAY_TEST\"; printf error >&2; exit 7"), Env: map[string]string{"RELAY_TEST": "SSH 'quoted' value"}})
 	if err != nil || result.ExitCode != 7 || result.Stdout != "SSH 'quoted' value" || result.Stderr != "error" {
 		t.Fatalf("exec: %+v %v", result, err)
 	}
-	result, err = c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: "sleep 10", TimeoutMS: 100})
+	result, err = c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: native("Start-Sleep -Seconds 10", "sleep 10"), TimeoutMS: 100})
 	if err != nil || !result.TimedOut {
 		t.Fatalf("timeout: %+v %v", result, err)
 	}
-	_, err = c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: "printf file-result > relay-test.txt"})
+	_, err = c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: native("[IO.File]::WriteAllText('relay-test.txt','file-result')", "printf file-result > relay-test.txt")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,11 +86,11 @@ func TestSSHIntegration(t *testing.T) {
 	if _, err := c.Exec(ctx, d.Handle, protocol.ExecRequest{WorkingDir: "../", Command: "pwd"}); err == nil {
 		t.Fatal("working directory escaped workspace")
 	}
-	_, err = c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: "ln -sf /etc/passwd relay-link"})
+	_, err = c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: native("cmd.exe /c mklink /J relay-link $env:WINDIR", "ln -sf /etc/passwd relay-link")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.ReadFile(ctx, d.Handle, "relay-link"); err == nil {
+	if _, err := c.ReadFile(ctx, d.Handle, native("relay-link/System32/kernel32.dll", "relay-link")); err == nil {
 		t.Fatal("symlink escaped workspace")
 	}
 	if _, err := c.StartTask(ctx, d.Handle, protocol.TaskRequest{}); err == nil || !strings.Contains(err.Error(), "capability") {
@@ -85,13 +99,13 @@ func TestSSHIntegration(t *testing.T) {
 	if _, err := c.Desktop(ctx, d.Handle); err == nil || !strings.Contains(err.Error(), "capability") {
 		t.Fatalf("unsupported desktop: %v", err)
 	}
-	_, _ = c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: "rm -f cancel.pid"})
+	_, _ = c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: native("[IO.File]::Delete('cancel.pid')", "rm -f cancel.pid")})
 	done := make(chan error, 1)
 	go func() {
-		_, err := c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: "sleep 60 & echo $! > cancel.pid; wait"})
+		_, err := c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: native("$p=Start-Process (Join-Path $PSHOME 'powershell.exe') -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 60' -PassThru -WindowStyle Hidden; [IO.File]::WriteAllText('cancel.pid',[string]$p.Id); Start-Sleep -Seconds 60", "sleep 60 & echo $! > cancel.pid; wait")})
 		done <- err
 	}()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	started := false
 	for time.Now().Before(deadline) {
 		if _, err := c.ReadFile(ctx, d.Handle, "cancel.pid"); err == nil {
@@ -122,7 +136,7 @@ func TestSSHIntegration(t *testing.T) {
 	if _, err := c.TestConnection(ctx, d.ID, d.ActiveConnection); err != nil {
 		t.Fatal(err)
 	}
-	result, err = c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: "ps -p \"$(cat cancel.pid)\" -o stat= | grep -qv Z"})
+	result, err = c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: native("if(Get-Process -Id ([int][IO.File]::ReadAllText('cancel.pid')) -ErrorAction SilentlyContinue){exit 0}else{exit 1}", "ps -p \"$(cat cancel.pid)\" -o stat= | grep -qv Z")})
 	if err != nil || result.ExitCode == 0 {
 		t.Fatalf("revoked command's child is still running: %+v %v", result, err)
 	}
@@ -132,5 +146,5 @@ func TestSSHIntegration(t *testing.T) {
 	}
 	restarted.Close()
 	// Cleanup only the files created by this test, within its isolated workspace.
-	_, _ = c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: "rm -f relay-test.txt relay-link cancel.pid"})
+	_, _ = c.Exec(ctx, d.Handle, protocol.ExecRequest{Command: native("[IO.File]::Delete('relay-test.txt'); [IO.File]::Delete('cancel.pid'); if([IO.Directory]::Exists('relay-link')){[IO.Directory]::Delete('relay-link')}", "rm -f relay-test.txt relay-link cancel.pid")})
 }

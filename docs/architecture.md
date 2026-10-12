@@ -37,7 +37,7 @@ Controller device listings project the selected connection's workspace, capabili
 
 Controller installations contain `AgentRelay` (CLI, Controller, browser GUI) and `AgentRelay-mcp` (stdio MCP adapter), plus the user's agent. Worker installations contain only `AgentRelay-worker` and pairing state. Worker does not depend on the Controller, SSH executor or Controller source-scanning packages. Libraries are linked into the executable. `scripts/build.ps1` and `scripts/build.sh` build CGO-free Windows/macOS/Linux amd64 and arm64 binaries.
 
-Windows uses built-in PowerShell; macOS/Linux use `sh`. Cancellation terminates process trees on Windows and process groups on POSIX. Desktop support is optional: Windows/macOS have native implementations; Linux advertises desktop as unsupported. macOS capture/input require Screen Recording/Accessibility permissions and an interactive login session.
+Windows uses built-in PowerShell; macOS/Linux use `sh`. Worker cancellation terminates process trees on Windows and process groups on POSIX. SSH uses ephemeral native Shell scripts rather than Python: Windows owns children in a Job Object, while POSIX walks and terminates the active process tree. Its native system requirements and detached-process limits are documented in [native SSH executors](ssh.md). Desktop support is optional: Windows/macOS have native implementations; Linux advertises desktop as unsupported. macOS capture/input require Screen Recording/Accessibility permissions and an interactive login session.
 
 ## Workspace Authority
 

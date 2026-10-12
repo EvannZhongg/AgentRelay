@@ -4,7 +4,7 @@ A device owns identity and authorization. Each connection independently owns a t
 
 | Capability | SSH | Native Worker |
 | --- | --- | --- |
-| Execute | POSIX shell | Windows PowerShell / macOS and Linux sh |
+| Execute | Windows PowerShell / macOS and Linux sh | Windows PowerShell / macOS and Linux sh |
 | Read files | Up to 16 MiB per file | Yes |
 | Incremental sync | Unavailable | Available in local_sync mode |
 | Tasks / persistent sessions | Unavailable | Yes |
@@ -12,7 +12,7 @@ A device owns identity and authorization. Each connection independently owns a t
 
 ## SSH With A Remote Repository
 
-Controller uses OpenSSH, key/agent authentication, batch mode and strict known-host checking. The current SSH executor requires Python 3 and a POSIX shell on the target; these requirements apply only to SSH. The helper is ephemeral and no AgentRelay listener or binary is installed there.
+Controller uses OpenSSH, key/agent authentication, batch mode and strict known-host checking. Windows targets use their system PowerShell; macOS/Linux targets use native sh and system utilities. Neither requires Python or an AgentRelay binary. See [native SSH executors](ssh.md) for requirements, platform selection and lifecycle limits.
 
 ```text
 AgentRelay connection add-ssh --name linux-dev --workspace /home/dev/repo --host 192.168.1.20 --user dev
