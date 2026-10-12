@@ -70,7 +70,7 @@ func TestMCPExecutesRemoteRepositoryWithoutSync(t *testing.T) {
 		if err := json.Unmarshal([]byte(text), &execution); err != nil {
 			t.Fatal(err)
 		}
-		if execution.ExitCode != 0 || strings.TrimSpace(execution.Stdout) != dir {
+		if execution.ExitCode != 0 || !testutil.OutputIsPath(t, execution.Stdout, dir) {
 			t.Fatalf("unsynced repository: %+v", execution)
 		}
 	}

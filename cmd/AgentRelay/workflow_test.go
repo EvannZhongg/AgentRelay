@@ -72,7 +72,7 @@ func TestCLITaskWorkflow(t *testing.T) {
 	call("start", &task, "--dir", "project", "--env", "AR_CLI_TEST=first", "--env", "AR_CLI_TEST=value=ok", "--timeout-ms", "5000", testshell.Native("Write-Output $env:AR_CLI_TEST; (Get-Location).Path", "printf '%s\\n' \"$AR_CLI_TEST\"; pwd"))
 	t.Cleanup(func() { _ = c.CancelTask(context.Background(), device, task.ID) })
 	wait(&task)
-	if task.Status != "completed" || task.Result == nil || !strings.Contains(task.Result.Stdout, "value=ok") || !strings.Contains(task.Result.Stdout, filepath.Join(root, "project")) {
+	if task.Status != "completed" || task.Result == nil || !strings.Contains(task.Result.Stdout, "value=ok") || !testutil.OutputContainsPath(t, task.Result.Stdout, filepath.Join(root, "project")) {
 		t.Fatalf("task = %+v", task)
 	}
 	var tasks []protocol.Task
@@ -182,7 +182,7 @@ func TestCLISessionAndPull(t *testing.T) {
 		args = append([]string{"get"}, common...)
 		call(sessionCommand, append(args, "--id", session.ID), &session)
 	}
-	if !strings.Contains(session.Stdout, "retained:env-ok") || !strings.Contains(session.Stdout, "direct-input") || !strings.Contains(session.Stdout, filepath.Join(root, "project")) {
+	if !strings.Contains(session.Stdout, "retained:env-ok") || !strings.Contains(session.Stdout, "direct-input") || !testutil.OutputContainsPath(t, session.Stdout, filepath.Join(root, "project")) {
 		t.Fatalf("session = %+v", session)
 	}
 	var sessions []protocol.Session
