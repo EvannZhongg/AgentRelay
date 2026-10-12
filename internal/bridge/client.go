@@ -88,6 +88,22 @@ func (c *Client) Devices(ctx context.Context) (out []protocol.Device, err error)
 	err = c.Do(ctx, "GET", "/v1/devices", nil, &out)
 	return
 }
+func (c *Client) CreateDevice(ctx context.Context, req protocol.DeviceCreate) (out protocol.Device, err error) {
+	err = c.Do(ctx, "POST", "/v1/devices", req, &out)
+	return
+}
+func (c *Client) AddSSH(ctx context.Context, id string, req protocol.SSHConfig) (out protocol.Connection, err error) {
+	err = c.Do(ctx, "POST", devicePath(id)+"/connections", req, &out)
+	return
+}
+func (c *Client) TestConnection(ctx context.Context, id, cid string) (out protocol.Connection, err error) {
+	err = c.Do(ctx, "POST", devicePath(id)+"/connections/"+url.PathEscape(cid)+"/test", nil, &out)
+	return
+}
+func (c *Client) AttachPairing(ctx context.Context, pairingID, deviceID string) (out protocol.PairingStatus, err error) {
+	err = c.Do(ctx, "POST", "/v1/pair-requests/"+url.PathEscape(pairingID)+"/approve", map[string]string{"device_id": deviceID}, &out)
+	return
+}
 func (c *Client) PairRequests(ctx context.Context) (out []protocol.PairingRequest, err error) {
 	err = c.Do(ctx, "GET", "/v1/pair-requests", nil, &out)
 	return

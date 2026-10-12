@@ -8,6 +8,7 @@ This document is for contributors. User setup and day-to-day commands belong in 
 cmd/AgentRelay       controller CLI
 cmd/AgentRelay-mcp   stdio MCP adapter
 internal/bridge      HTTPS controller, pairing and routing
+internal/backend     optional device capability interfaces and RPC adapters
 internal/filesync    controller-side scanning, ignore evaluation and hashing
 internal/worker      Worker lifecycle, shell, files, tasks and sessions
 internal/desktop     native desktop backends and validation
@@ -44,7 +45,7 @@ Windows PowerShell is the tested execution environment. The POSIX shell fallback
 ## Adding A Remote Operation
 
 1. Define or update the request and response types in `internal/protocol`.
-2. Add the Worker handler and route it through the existing RPC dispatch.
+2. Add a capability interface/implementation and the Worker or SSH executor operation. Advertise only supported capabilities and route through the selected connection's capability set.
 3. Add the Bridge client method and local-only controller endpoint when needed.
 4. Expose the operation in the CLI and/or MCP adapter with matching validation and error behavior.
 5. Add unit and lifecycle coverage for authorization, disconnects, path boundaries and persistence as applicable.

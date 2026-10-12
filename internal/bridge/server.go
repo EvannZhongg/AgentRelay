@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"AgentRelay/internal/backend"
 	"AgentRelay/internal/protocol"
 	"AgentRelay/internal/state"
 	"AgentRelay/internal/transport"
@@ -31,20 +32,27 @@ const syncMappingRetention = time.Hour
 
 type Config struct{ ListenAddr, StatePath string }
 type record struct {
-	Device    protocol.Device `json:"device"`
-	TokenHash string          `json:"token_hash"`
+	Device protocol.Device `json:"device"`
+}
+type connectionRecord struct {
+	Connection protocol.Connection `json:"connection"`
+	TokenHash  string              `json:"token_hash,omitempty"`
 }
 type registry struct {
-	Identity transport.Identity `json:"identity"`
-	Devices  map[string]record  `json:"devices"`
+	Schema      int                         `json:"schema"`
+	Identity    transport.Identity          `json:"identity"`
+	Devices     map[string]record           `json:"devices"`
+	Connections map[string]connectionRecord `json:"connections"`
 }
 type Server struct {
 	cfg          Config
 	mu           sync.RWMutex
 	store        registry
 	connections  map[string]*transport.Peer
+	sshCalls     map[string]map[string]context.CancelFunc
 	pairings     map[string]*pendingPairing
 	syncMappings map[syncMappingKey]syncMapping
+	syncStarts   map[string]int
 }
 
 type syncMappingKey struct {
@@ -71,9 +79,21 @@ func New(cfg Config) (*Server, error) {
 	if cfg.StatePath == "" {
 		cfg.StatePath = state.Path("bridge")
 	}
-	s := &Server{cfg: cfg, connections: map[string]*transport.Peer{}, pairings: map[string]*pendingPairing{}, syncMappings: map[syncMappingKey]syncMapping{}}
+	s := &Server{cfg: cfg, connections: map[string]*transport.Peer{}, sshCalls: map[string]map[string]context.CancelFunc{}, pairings: map[string]*pendingPairing{}, syncMappings: map[syncMappingKey]syncMapping{}}
 	if err := state.Load(cfg.StatePath, &s.store); err != nil {
 		return nil, fmt.Errorf("load bridge state: %w", err)
+	}
+	if (s.store.Identity.Certificate != "" || len(s.store.Devices) != 0 || len(s.store.Connections) != 0) && s.store.Schema != 2 {
+		return nil, errors.New("unsupported bridge state schema; initialize a new state file")
+	}
+	s.store.Schema = 2
+	for _, rec := range s.store.Devices {
+		if rec.Device.Handle == "" {
+			return nil, errors.New("invalid device state: missing handle")
+		}
+	}
+	if s.store.Connections == nil {
+		s.store.Connections = map[string]connectionRecord{}
 	}
 	if s.store.Devices == nil {
 		s.store.Devices = map[string]record{}
@@ -91,19 +111,13 @@ func New(cfg Config) (*Server, error) {
 	if _, err := s.store.Identity.TLS(); err != nil {
 		return nil, err
 	}
-	stateChanged := false
 	for id, rec := range s.store.Devices {
 		rec.Device.Online = false
-		if strings.TrimSpace(rec.Device.Handle) == "" {
-			rec.Device.Handle = s.newDeviceHandleLocked()
-			stateChanged = true
-		}
 		s.store.Devices[id] = rec
 	}
-	if stateChanged {
-		if err := s.save(); err != nil {
-			return nil, fmt.Errorf("save device handles: %w", err)
-		}
+	for id, rec := range s.store.Connections {
+		rec.Connection.Online = false
+		s.store.Connections[id] = rec
 	}
 	return s, nil
 }
@@ -153,6 +167,9 @@ func (s *Server) Close() {
 	defer s.mu.Unlock()
 	for _, p := range s.connections {
 		p.Close()
+	}
+	for cid := range s.sshCalls {
+		s.cancelConnectionLocked(cid)
 	}
 }
 func (s *Server) pair(w http.ResponseWriter, r *http.Request) {
@@ -265,23 +282,50 @@ func (s *Server) pairRequestAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, protocol.PairingStatus{PairingRequest: pending.request, Status: pending.status})
 		return
 	}
-	id, token := transport.Token(), transport.Token()
-	d := pending.request.Device
-	d.ID = id
-	d.Handle = s.newDeviceHandleLocked()
-	if strings.EqualFold(strings.TrimSpace(d.Name), d.Handle) || !s.aliasAvailableLocked(d.Name, "") {
-		writeError(w, http.StatusConflict, errors.New("device alias is already in use"))
-		return
+	var attach struct {
+		DeviceID string `json:"device_id"`
 	}
-	d.Authorized = true
-	d.DesktopAccess = "granted"
-	d.Online = false
-	d.LastSeen = time.Time{}
-	d.Mappings = map[string]string{}
-	credentials := &protocol.Credentials{DeviceID: id, Token: token, Workspace: d.Workspace, Fingerprint: s.Fingerprint()}
-	s.store.Devices[id] = record{Device: d, TokenHash: tokenHash(token)}
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := readJSON(r, &attach); err != nil && err != io.EOF {
+			writeError(w, 400, err)
+			return
+		}
+	}
+	id, token, connectionID := transport.Token(), transport.Token(), transport.Token()
+	d := pending.request.Device
+	if attach.DeviceID != "" {
+		existing, ok := s.store.Devices[attach.DeviceID]
+		if !ok || !existing.Device.Authorized || existing.Device.Workspace != d.Workspace {
+			writeError(w, 400, errors.New("target device must be authorized and use the same workspace"))
+			return
+		}
+		id = attach.DeviceID
+		d = existing.Device
+	} else {
+		d.ID = id
+		d.Handle = s.newDeviceHandleLocked()
+		if strings.EqualFold(strings.TrimSpace(d.Name), d.Handle) || !s.aliasAvailableLocked(d.Name, "") {
+			writeError(w, http.StatusConflict, errors.New("device alias is already in use"))
+			return
+		}
+		d.Authorized = true
+		d.DesktopAccess = "granted"
+		d.Online = false
+		d.LastSeen = time.Time{}
+		d.Mappings = map[string]string{}
+		d.ActiveConnection = connectionID
+	}
+	credentials := &protocol.Credentials{DeviceID: id, ConnectionID: connectionID, Token: token, Workspace: d.Workspace, Fingerprint: s.Fingerprint()}
+	previous, existed := s.store.Devices[id]
+	s.store.Devices[id] = record{Device: d}
+	s.store.Connections[connectionID] = connectionRecord{Connection: protocol.Connection{ID: connectionID, DeviceID: id, Kind: "worker", Capabilities: pending.request.Device.Capabilities}, TokenHash: tokenHash(token)}
 	if err := s.save(); err != nil {
-		delete(s.store.Devices, id)
+		if existed {
+			s.store.Devices[id] = previous
+		} else {
+			delete(s.store.Devices, id)
+		}
+		delete(s.store.Connections, connectionID)
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -299,10 +343,12 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.Header.Get("X-AgentRelay-Device")
+	connectionID := r.Header.Get("X-AgentRelay-Connection")
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	s.mu.Lock()
 	rec, ok := s.store.Devices[id]
-	if !ok || !rec.Device.Authorized || subtle.ConstantTimeCompare([]byte(rec.TokenHash), []byte(tokenHash(token))) != 1 {
+	connection, connected := s.store.Connections[connectionID]
+	if !ok || !connected || connection.Connection.DeviceID != id || connection.Connection.Kind != "worker" || !rec.Device.Authorized || subtle.ConstantTimeCompare([]byte(connection.TokenHash), []byte(tokenHash(token))) != 1 {
 		s.mu.Unlock()
 		writeError(w, 401, errors.New("device is not authorized; pair again"))
 		return
@@ -327,27 +373,36 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		current, exists := s.store.Devices[id]
-		if !exists || s.connections[id] != peer || !current.Device.Authorized || d.ID != id || d.Workspace != current.Device.Workspace {
+		if !exists || s.connections[connectionID] != peer || !current.Device.Authorized || d.ID != id || d.Workspace != current.Device.Workspace {
 			return transport.Response{Status: 403}
 		}
 		previous := current
 		current.Device.OS = d.OS
 		current.Device.Architecture = d.Architecture
-		current.Device.Capabilities = d.Capabilities
+		connection := s.store.Connections[connectionID]
+		oldConnection := connection
+		connection.Connection.Capabilities = d.Capabilities
+		connection.Connection.Online = true
+		s.store.Connections[connectionID] = connection
 		current.Device.Metadata = d.Metadata
 		current.Device.LastSeen = time.Now()
-		current.Device.Online = true
+		if current.Device.ActiveConnection == connectionID {
+			current.Device.Capabilities = d.Capabilities
+			current.Device.Online = true
+		}
 		s.store.Devices[id] = current
 		if err := s.save(); err != nil {
 			s.store.Devices[id] = previous
+			s.store.Connections[connectionID] = oldConnection
 			return transport.Response{Status: 500}
 		}
 		return transport.Response{Status: 200}
 	})
-	old := s.connections[id]
-	s.connections[id] = peer
-	rec.Device.Online = false
-	s.store.Devices[id] = rec
+	old := s.connections[connectionID]
+	s.connections[connectionID] = peer
+	connection.Connection.Online = false
+	s.store.Connections[connectionID] = connection
+	s.refreshDeviceLocked(id)
 	close(ready)
 	s.mu.Unlock()
 	if old != nil {
@@ -360,22 +415,27 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 	case <-peer.Done():
 	case <-timer.C:
 		s.mu.RLock()
-		online := s.store.Devices[id].Device.Online
+		online := s.store.Connections[connectionID].Connection.Online
 		s.mu.RUnlock()
 		if online {
 			<-peer.Done()
 		}
 	}
 	s.mu.Lock()
-	if s.connections[id] == peer {
-		delete(s.connections, id)
-		rec = s.store.Devices[id]
-		rec.Device.Online = false
-		s.store.Devices[id] = rec
+	if s.connections[connectionID] == peer {
+		delete(s.connections, connectionID)
+		connection = s.store.Connections[connectionID]
+		connection.Connection.Online = false
+		s.store.Connections[connectionID] = connection
+		s.refreshDeviceLocked(id)
 	}
 	s.mu.Unlock()
 }
 func (s *Server) devicesRoot(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		s.createDevice(w, r)
+		return
+	}
 	if r.Method != "GET" {
 		methodNotAllowed(w)
 		return
@@ -384,17 +444,18 @@ func (s *Server) devicesRoot(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.RUnlock()
 	out := make([]protocol.Device, 0, len(s.store.Devices))
 	for _, rec := range s.store.Devices {
-		out = append(out, rec.Device)
+		out = append(out, s.deviceViewLocked(rec.Device))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	writeJSON(w, 200, out)
 }
 
 type DeviceUpdate struct {
-	Name          *string           `json:"name,omitempty"`
-	Authorized    *bool             `json:"authorized,omitempty"`
-	DesktopAccess *string           `json:"desktop_access,omitempty"`
-	Mappings      map[string]string `json:"workspace_mappings,omitempty"`
+	ActiveConnection *string           `json:"active_connection,omitempty"`
+	Name             *string           `json:"name,omitempty"`
+	Authorized       *bool             `json:"authorized,omitempty"`
+	DesktopAccess    *string           `json:"desktop_access,omitempty"`
+	Mappings         map[string]string `json:"workspace_mappings,omitempty"`
 }
 
 func validRemote(value string) bool {
@@ -432,7 +493,8 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	id, resolveErr := ResolveDeviceSelector(devices, selector)
 	rec, ok := s.store.Devices[id]
-	peer := s.connections[id]
+	connection := s.store.Connections[rec.Device.ActiveConnection].Connection
+	peer := s.connections[connection.ID]
 	s.mu.RUnlock()
 	if resolveErr != nil || !ok {
 		if resolveErr != nil {
@@ -446,12 +508,12 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 		s.updateDevice(w, r, id)
 		return
 	}
-	if !rec.Device.Authorized {
-		writeError(w, 403, errors.New("device authorization revoked"))
+	if parts[1] == "connections" {
+		s.connectionRoute(w, r, id, parts[2:])
 		return
 	}
-	if peer == nil || !rec.Device.Online {
-		writeError(w, 503, errors.New("device offline"))
+	if !rec.Device.Authorized {
+		writeError(w, 403, errors.New("device authorization revoked"))
 		return
 	}
 	endpoint := "/v1/" + strings.Join(parts[1:], "/")
@@ -459,8 +521,13 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, errors.New("unknown device operation"))
 		return
 	}
-	if strings.HasPrefix(endpoint, "/v1/desktop") && (rec.Device.Capabilities.Desktop == nil || !rec.Device.Capabilities.Desktop.Supported) {
-		writeError(w, http.StatusNotImplemented, errors.New("worker does not advertise desktop capability; update the worker"))
+	capability := backend.Capability(endpoint)
+	if capability != "" && !backend.Supported(connection.Capabilities, capability) {
+		writeError(w, http.StatusNotImplemented, fmt.Errorf("device does not provide %s capability", capability))
+		return
+	}
+	if !connection.Online || (connection.Kind == "worker" && peer == nil) {
+		writeError(w, 503, errors.New("device offline; test its connection or reconnect"))
 		return
 	}
 	if strings.HasPrefix(endpoint, "/v1/desktop") && rec.Device.DesktopAccess == "revoked" {
@@ -475,6 +542,11 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 	isSyncStart := endpoint == "/v1/files/sync/start" && r.Method == http.MethodPost
 	var pendingMapping syncMapping
 	if isSyncStart {
+		if err := s.beginSyncStart(id, connection.ID); err != nil {
+			writeError(w, 409, err)
+			return
+		}
+		defer s.endSyncStart(id)
 		data, pendingMapping, err = s.prepareSyncStart(id, data)
 		if err != nil {
 			writeError(w, 400, err)
@@ -513,8 +585,45 @@ func (s *Server) deviceRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 31*time.Minute)
 	defer cancel()
-	resp, err := peer.Call(ctx, transport.Request{Method: r.Method, Path: endpoint, Body: data})
+	var call backend.Call
+	if connection.Kind == "ssh" && connection.SSH != nil {
+		call = func(ctx context.Context, req transport.Request) (transport.Response, error) {
+			return s.callSSH(ctx, connection, req)
+		}
+	} else if peer != nil {
+		call = peer.Call
+	}
+	if call == nil {
+		writeError(w, 503, errors.New("connection is unavailable"))
+		return
+	}
+	var resp transport.Response
+	if capability == "" {
+		if strings.HasPrefix(endpoint, "/v1/device") {
+			resp.Body, _ = json.Marshal(s.agentDevice(rec.Device))
+			resp.Status = 200
+		} else {
+			resp.Body, _ = json.Marshal(protocol.Health{Status: "ok", APIVersion: protocol.APIVersion})
+			resp.Status = 200
+		}
+	} else {
+		resp, err = backend.FromRPC(call, connection.Capabilities).Dispatch(ctx, transport.Request{Method: r.Method, Path: endpoint, Body: data})
+	}
 	if err != nil {
+		var failure *backend.Error
+		if errors.As(err, &failure) {
+			writeError(w, failure.Status, err)
+			return
+		}
+		var syntax *json.SyntaxError
+		var fields *json.UnmarshalTypeError
+		if errors.As(err, &syntax) || errors.As(err, &fields) {
+			writeError(w, 400, err)
+			return
+		}
+		if connection.Kind == "ssh" && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			s.markConnectionFailed(connection, err)
+		}
 		writeError(w, 502, err)
 		return
 	}
@@ -577,9 +686,34 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 	rec := old
+	oldConnections := make(map[string]connectionRecord)
+	for cid, c := range s.store.Connections {
+		if c.Connection.DeviceID == id {
+			oldConnections[cid] = c
+		}
+	}
 	if r.Method == "DELETE" {
 		delete(s.store.Devices, id)
+		for cid := range oldConnections {
+			delete(s.store.Connections, cid)
+		}
 	} else {
+		if update.ActiveConnection != nil {
+			c, ok := s.store.Connections[*update.ActiveConnection]
+			if !ok || c.Connection.DeviceID != id {
+				s.mu.Unlock()
+				writeError(w, 400, errors.New("connection does not belong to this device"))
+				return
+			}
+			if *update.ActiveConnection != rec.Device.ActiveConnection && s.hasSyncMappingsLocked(id) {
+				s.mu.Unlock()
+				writeError(w, 409, errors.New("abort or finish active syncs before switching connections"))
+				return
+			}
+			rec.Device.ActiveConnection = *update.ActiveConnection
+			rec.Device.Capabilities = c.Connection.Capabilities
+			rec.Device.Online = c.Connection.Online && rec.Device.Authorized
+		}
 		if update.Name != nil {
 			if !s.aliasAvailableLocked(*update.Name, id) {
 				s.mu.Unlock()
@@ -610,6 +744,9 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request, id string)
 	}
 	if err := s.save(); err != nil {
 		s.store.Devices[id] = old
+		for cid, c := range oldConnections {
+			s.store.Connections[cid] = c
+		}
 		s.mu.Unlock()
 		writeError(w, 500, err)
 		return
@@ -617,11 +754,17 @@ func (s *Server) updateDevice(w http.ResponseWriter, r *http.Request, id string)
 	if r.Method == "DELETE" || (update.Authorized != nil && !*update.Authorized) {
 		s.clearDeviceSyncMappingsLocked(id)
 	}
-	peer := s.connections[id]
 	if r.Method == "DELETE" || !rec.Device.Authorized {
-		delete(s.connections, id)
-		if peer != nil {
-			peer.Close()
+		for cid, c := range oldConnections {
+			s.cancelConnectionLocked(cid)
+			if peer := s.connections[cid]; peer != nil {
+				peer.Close()
+			}
+			delete(s.connections, cid)
+			if r.Method != "DELETE" {
+				c.Connection.Online = false
+				s.store.Connections[cid] = c
+			}
 		}
 	}
 	s.mu.Unlock()

@@ -2,15 +2,16 @@ English | [简体中文](README.zh-CN.md)
 
 # AgentRelay
 
-AgentRelay gives a coding agent a secure, controlled connection to native execution environments on other computers. The agent stays on the controller; a lightweight Worker runs commands, syncs files, manages tasks and sessions, and can optionally control an interactive desktop.
+AgentRelay gives a coding agent a secure, controlled connection to native execution environments on other computers. The agent stays on the controller and sees devices with explicit capabilities. Each device can select SSH or a native Worker as its execution connection.
 
 ```text
 Coding agent -- MCP stdio / CLI --> Bridge (controller, HTTPS)
-                                      ^
-                                      | outbound, authenticated WSS
-                                    Worker (target computer)
-                                      |
-                           workspace / shell / desktop
+                                      | selected device connection
+                        +-------------+-------------+
+                        |                           |
+                  SSH + Python 3             Native Worker (WSS)
+                  shell / file reads         shell / files / tasks
+                                             sessions / desktop
 ```
 
 The Worker opens no inbound port. LAN, Ethernet and future IP-over-USB connections use the same protocol. AgentRelay does not include a model runtime or an agent loop.
@@ -18,7 +19,7 @@ The Worker opens no inbound port. LAN, Ethernet and future IP-over-USB connectio
 ## What You Need
 
 - A Windows controller running the coding agent. Windows PowerShell is the tested target.
-- A target computer with the AgentRelay Worker and a workspace directory.
+- A target computer with a workspace directory and either SSH + Python 3 (POSIX targets) or the native AgentRelay Worker.
 - Network reachability from the Worker to the controller. The controller accepts inbound TCP `8764`; discovery uses UDP `8763`.
 - macOS desktop access additionally needs Screen Recording and Accessibility permissions. POSIX shell support and macOS runtime support are experimental.
 
@@ -39,6 +40,8 @@ go build -ldflags "-H=windowsgui" -o AgentRelay-mcp.exe ./cmd/AgentRelay-mcp
 Pairing requests expire after five minutes. A device and credentials are created only after approval. Pairing must use a discovered controller so the Worker can pin its certificate fingerprint; an unverified manual URL is rejected.
 
 ## Connect Your Agent
+
+For deployment without a Worker, use **添加 SSH 连接** in the GUI, then **测试**. SSH v1 provides command execution and workspace file reads. A device can retain both SSH and Worker connections while appearing once to the agent. See [Devices and connections](docs/connections.md) for setup, supported capabilities and connection selection. This refactor requires fresh schema-2 state; old state is rejected without migration.
 
 Run this on the controller, as the same user that runs the Bridge:
 

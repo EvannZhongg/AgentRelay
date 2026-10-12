@@ -48,6 +48,8 @@ func main() {
 		err = guiCommand(os.Args[2:])
 	case "device":
 		err = deviceCommand(os.Args[2:])
+	case "connection":
+		err = connectionCommand(os.Args[2:])
 	case "desktop":
 		err = desktopCommand(os.Args[2:])
 	case "exec":
@@ -259,5 +261,6 @@ func printJSON(v any) error {
 	return err
 }
 func usage() {
+	fmt.Println("Connection management: AgentRelay connection add-ssh|list|test|select|remove|attach-worker")
 	fmt.Println("AgentRelay\n\nUsage:\n  AgentRelay setup\n  AgentRelay bridge serve\n  AgentRelay gui\n  AgentRelay worker setup|serve\n  AgentRelay device list|rename|authorize|revoke|remove\n  AgentRelay exec --device <alias|handle> [--dir <local-project-or-remote-path>] <command>\n  AgentRelay task start|list|get|retrieve|cancel --device <alias|handle> [--id <task-id>]\n  AgentRelay sync --device <alias|handle> --source <dir> [--mode update|mirror] [--dry-run]\n  AgentRelay pull --device <alias|handle> [--out <local-dir>] <remote-path>...\n  AgentRelay session create|list|get|send|close --device <alias|handle> [--id <session-id>]\n  AgentRelay desktop info|capture|input --device <alias|handle> [--json <object>]\n  AgentRelay mcp config")
 }

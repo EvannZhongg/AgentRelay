@@ -1,6 +1,6 @@
 # Architecture
 
-AgentRelay is an infrastructure layer for coding agents. It does not run a model, plan work, or expose an agent loop. The controller hosts the Bridge and the agent-facing CLI/MCP adapter; target computers run a lightweight Worker.
+AgentRelay is an infrastructure layer for coding agents. It does not run a model, plan work, or expose an agent loop. The controller hosts the Bridge and the agent-facing CLI/MCP adapter; target computers expose capabilities through SSH or a native Worker. Devices own stable identity; connections own transport and credentials. See [Devices, connections and capabilities](connections.md) for the schema, capability matrix and management workflow.
 
 ## Components
 
@@ -12,14 +12,14 @@ AgentRelay is an infrastructure layer for coding agents. It does not run a model
 | MCP adapter | Stdio JSON-RPC server exposing the remote operations as MCP tools |
 | Discovery | LAN advertisement of the controller URL and certificate fingerprint used during pairing |
 
-The normal request path is `MCP/CLI -> Bridge HTTPS -> authenticated WSS -> Worker handler`. The Worker does not listen for inbound HTTP requests. `internal/protocol` defines shared messages; `internal/transport` provides multiplexed request/response, cancellation and heartbeats.
+The request path is `MCP/CLI -> Bridge HTTPS -> selected connection -> capability backend`. Native Worker connections use authenticated WSS; SSH connections use strict OpenSSH channels and an ephemeral Python executor. The Worker does not listen for inbound HTTP requests. `internal/protocol` defines shared messages, `internal/backend` composes optional capability interfaces and `internal/transport` carries RPC.
 
 ## Trust And Pairing
 
 1. The controller starts the Bridge and advertises its HTTPS URL, port and certificate fingerprint on the local network.
 2. The Worker selects a discovered controller, pins the advertised fingerprint, and sends a pairing request with its proposed name and workspace.
 3. The controller shows a short verification number. The operator compares it with the Worker output and approves or rejects the request.
-4. Approval creates a stable device ID and credentials. The Worker stores the Bridge URL, fingerprint, device ID, credential and workspace, then opens the outbound WSS connection.
+4. Approval creates a device or attaches to an explicitly selected existing device with the same workspace. Credentials belong to a new Worker connection. The Worker stores the Bridge URL, fingerprint, device ID, connection ID, credential and workspace, then opens the outbound WSS connection.
 
 Pairing requests expire after five minutes. A manually entered URL without a trusted discovery fingerprint is rejected. Revoking a device is persisted before its active connection is closed; removal deletes the device record and invalidates its credentials.
 
@@ -51,7 +51,7 @@ The Bridge exposes health and pairing endpoints to the network as needed for set
 - Operations: `/v1/devices/{id}/exec`, `/files/sync/start`, `/files/sync/{session}/{manifest,plan,file,commit}`, `/files/read`, `/tasks`, `/sessions` and their sub-resources.
 - Desktop: `GET /v1/devices/{id}/desktop`, `POST /v1/devices/{id}/desktop/capture`, `POST /v1/devices/{id}/desktop/input`.
 
-There is no compatibility layer for the removed single-request sync format, Worker URL registration, Worker listening flags or the previous device-ID derivation. Service installation, PTY support and multi-device scheduling are outside the current implementation.
+Bridge state schema 2 stores device and connection maps separately. Previous state and Worker credentials are rejected; no migration or compatibility layers are provided. Service installation, PTY support and multi-device scheduling are outside the current implementation.
 
 ## Failure And Recovery Rules
 

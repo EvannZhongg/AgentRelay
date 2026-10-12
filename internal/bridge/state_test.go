@@ -12,9 +12,9 @@ import (
 	"time"
 )
 
-func TestMissingDeviceHandlesAreBackfilled(t *testing.T) {
+func TestMissingDeviceHandlesAreRejected(t *testing.T) {
 	filename := filepath.Join(t.TempDir(), "bridge.json")
-	initial := registry{Devices: map[string]record{
+	initial := registry{Schema: 2, Devices: map[string]record{
 		"private-id": {Device: protocol.Device{ID: "private-id", Name: "laptop", Workspace: t.TempDir()}},
 	}}
 	data, err := json.Marshal(initial)
@@ -24,20 +24,15 @@ func TestMissingDeviceHandlesAreBackfilled(t *testing.T) {
 	if err := os.WriteFile(filename, data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	s, err := New(Config{StatePath: filename})
-	if err != nil {
-		t.Fatal(err)
-	}
-	handle := s.store.Devices["private-id"].Device.Handle
-	if handle == "" {
-		t.Fatal("missing device handle was not backfilled")
+	if _, err := New(Config{StatePath: filename}); err == nil {
+		t.Fatal("missing handle accepted")
 	}
 	var saved registry
 	if err := state.Load(filename, &saved); err != nil {
 		t.Fatal(err)
 	}
-	if saved.Devices["private-id"].Device.Handle != handle {
-		t.Fatalf("backfilled handle was not persisted: %q vs %q", saved.Devices["private-id"].Device.Handle, handle)
+	if saved.Devices["private-id"].Device.Handle != "" {
+		t.Fatal("invalid state was migrated")
 	}
 }
 

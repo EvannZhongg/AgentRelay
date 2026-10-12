@@ -70,7 +70,7 @@ func (s *Server) Device() protocol.Device {
 	}
 	return protocol.Device{
 		ID: s.cfg.DeviceID, Name: s.cfg.Name, OS: runtime.GOOS, Workspace: s.cfg.Workspace,
-		Architecture: runtime.GOARCH, Capabilities: protocol.Capabilities{Desktop: capability, Exec: true, Files: true, Tasks: true, Sessions: true, Shells: []string{nativeShell}, MaxPayload: 32 << 20},
+		Architecture: runtime.GOARCH, Capabilities: protocol.Capabilities{Desktop: capability, Exec: true, Files: true, Sync: true, Tasks: true, Sessions: true, Shells: []string{nativeShell}, MaxPayload: 32 << 20},
 		Metadata: map[string]string{"hostname": host, "workspace": s.cfg.Workspace}, LastSeen: time.Now(), Online: true,
 	}
 }

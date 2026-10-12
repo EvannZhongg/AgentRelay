@@ -2,15 +2,16 @@
 
 # AgentRelay
 
-AgentRelay 让 Coding Agent 安全、受控地连接其他电脑上的原生执行环境。Agent 只运行在主控电脑上；轻量 Worker 负责执行命令、同步文件、管理任务和会话，也可以按需控制交互桌面。
+AgentRelay 让 Coding Agent 安全、受控地连接其他电脑上的原生执行环境。Agent 只运行在主控电脑上，通过统一设备能力接口执行操作；每台设备可选择 SSH 或原生 Worker 连接。
 
 ```text
 Coding Agent -- MCP stdio / CLI --> Bridge（主控端，HTTPS）
-                                      ^
-                                      | 出站、认证的 WSS 连接
-                                    Worker（目标电脑）
-                                      |
-                           Workspace / Shell / 桌面
+                                      | 设备的执行连接
+                        +-------------+-------------+
+                        |                           |
+                  SSH + Python 3             原生 Worker（WSS）
+                  Shell / 文件读取           Shell / 文件 / 任务
+                                             会话 / 桌面
 ```
 
 Worker 不开放入站端口。局域网、网线以及未来的 USB IP 网络使用同一套协议。AgentRelay 不包含模型运行时或 Agent 循环。
@@ -18,7 +19,7 @@ Worker 不开放入站端口。局域网、网线以及未来的 USB IP 网络�
 ## 使用条件
 
 - 一台运行 Coding Agent 的 Windows 主控电脑，当前以 Windows PowerShell 为主要测试目标。
-- 一台安装 AgentRelay Worker 并提供 Workspace 目录的目标电脑。
+- 一台提供 Workspace 目录的目标电脑，可使用 SSH + Python 3（POSIX 系统）或原生 AgentRelay Worker。
 - Worker 能访问主控电脑；主控默认接收 TCP `8764`，局域网发现使用 UDP `8763`。
 - macOS 桌面能力还需要“屏幕录制”和“辅助功能”权限。POSIX Shell 和 macOS 实机运行仍属实验性质。
 
@@ -39,6 +40,10 @@ go build -ldflags "-H=windowsgui" -o AgentRelay-mcp.exe ./cmd/AgentRelay-mcp
 配对请求五分钟后过期，只有批准后才会创建设备和凭据。配对必须选择自动发现的主控端，以便 Worker 固定证书指纹；未验证的手动 URL 会被拒绝。
 
 ## 接入 Agent
+
+无需部署 Worker 时，在 GUI 中选择“添加 SSH 连接”，填写配置后点击“测试”。SSH 首版支持命令执行和工作区文件读取；原生 Worker 提供增量同步、任务、持久会话和可选桌面能力。桌面操作取决于系统、交互会话及权限，不作为跨系统稳定能力保证。
+
+同一设备可保留 SSH 与 Worker 两种连接，通过“设为执行连接”明确选择。批准 Worker 配对时选择“附加到”已有设备（工作区须一致），Agent 始终只看到一个稳定设备句柄。详见[设备、连接和能力](docs/connections.md)。此次重构使用 schema 2 状态，旧状态直接拒绝；请使用新的 `AGENTRELAY_HOME`，重新配置或配对。
 
 在主控电脑以运行 Bridge 的同一用户执行：
 

@@ -40,7 +40,7 @@ func (e *rpcError) Error() string { return e.Message }
 const (
 	currentProtocolVersion = "2025-06-18"
 	serverName             = "AgentRelay"
-	serverVersion          = "0.2.0"
+	serverVersion          = "0.3.0"
 )
 
 func main() {
@@ -152,7 +152,7 @@ func toolDefinitions() []map[string]any {
 		return map[string]any{"type": "string", "description": description}
 	}
 	return append([]map[string]any{
-		{"name": "device_list", "description": "List paired devices using persistent handles and aliases, authorization, workspace mappings, capabilities and connection status. Private device IDs are omitted; offline entries remain visible.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
+		{"name": "device_list", "description": "List logical devices using persistent handles and aliases, authorization, workspace mappings, capabilities and availability. Each device appears once. Check advertised capabilities before requesting an operation. Private IDs and connection configuration are omitted; offline entries remain visible.", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}},
 		{"name": "device_exec", "description": "Execute a command on a device selected by a persistent handle or alias and return stdout, stderr and exit status.", "inputSchema": map[string]any{
 			"type": "object", "additionalProperties": false,
 			"properties": map[string]any{

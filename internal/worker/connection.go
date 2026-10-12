@@ -100,7 +100,7 @@ func (s *Server) Pair(ctx context.Context, base, fingerprint, statePath string, 
 			credentials = *status.Credentials
 			credentials.BridgeURL = strings.TrimRight(base, "/")
 			credentials.Workspace = s.cfg.Workspace
-			if credentials.DeviceID == "" || credentials.Token == "" || credentials.Fingerprint != fingerprint {
+			if credentials.DeviceID == "" || credentials.ConnectionID == "" || credentials.Token == "" || credentials.Fingerprint != fingerprint {
 				return credentials, errors.New("invalid pairing approval")
 			}
 			break
@@ -226,6 +226,9 @@ func pairingHTTPError(prefix string, resp *http.Response) error {
 }
 
 func (s *Server) Connect(ctx context.Context, credentials protocol.Credentials) (*transport.Peer, error) {
+	if credentials.ConnectionID == "" {
+		return nil, errors.New("connection_id is required; pair this Worker using a fresh state directory")
+	}
 	if err := validateBridge(credentials.BridgeURL); err != nil {
 		return nil, err
 	}
@@ -238,6 +241,7 @@ func (s *Server) Connect(ctx context.Context, credentials protocol.Credentials) 
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer "+credentials.Token)
 	headers.Set("X-AgentRelay-Device", credentials.DeviceID)
+	headers.Set("X-AgentRelay-Connection", credentials.ConnectionID)
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, TLSClientConfig: transport.PinnedTLS(credentials.Fingerprint)}
 	conn, resp, err := dialer.DialContext(ctx, u.String(), headers)
 	if err != nil {

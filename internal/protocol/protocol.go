@@ -5,23 +5,26 @@ import "time"
 const APIVersion = "v1"
 
 type Device struct {
-	ID            string            `json:"id"`
-	Handle        string            `json:"handle,omitempty"`
-	Name          string            `json:"name"`
-	OS            string            `json:"os"`
-	OSVersion     string            `json:"os_version,omitempty"`
-	Architecture  string            `json:"architecture"`
-	Authorized    bool              `json:"authorized"`
-	DesktopAccess string            `json:"desktop_access,omitempty"`
-	Workspace     string            `json:"workspace"`
-	Mappings      map[string]string `json:"workspace_mappings,omitempty"`
-	Capabilities  Capabilities      `json:"capabilities"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
-	LastSeen      time.Time         `json:"last_seen"`
-	Online        bool              `json:"online"`
+	ActiveConnection string            `json:"active_connection,omitempty"`
+	Connections      []Connection      `json:"connections,omitempty"`
+	ID               string            `json:"id"`
+	Handle           string            `json:"handle,omitempty"`
+	Name             string            `json:"name"`
+	OS               string            `json:"os"`
+	OSVersion        string            `json:"os_version,omitempty"`
+	Architecture     string            `json:"architecture"`
+	Authorized       bool              `json:"authorized"`
+	DesktopAccess    string            `json:"desktop_access,omitempty"`
+	Workspace        string            `json:"workspace"`
+	Mappings         map[string]string `json:"workspace_mappings,omitempty"`
+	Capabilities     Capabilities      `json:"capabilities"`
+	Metadata         map[string]string `json:"metadata,omitempty"`
+	LastSeen         time.Time         `json:"last_seen"`
+	Online           bool              `json:"online"`
 }
 
 type Capabilities struct {
+	Sync       bool               `json:"sync"`
 	Desktop    *DesktopCapability `json:"desktop,omitempty"`
 	Exec       bool               `json:"exec"`
 	Files      bool               `json:"files"`
@@ -186,9 +189,10 @@ type PairingStatus struct {
 }
 
 type Credentials struct {
-	BridgeURL   string `json:"bridge_url"`
-	Fingerprint string `json:"fingerprint"`
-	DeviceID    string `json:"device_id"`
-	Token       string `json:"token"`
-	Workspace   string `json:"workspace"`
+	ConnectionID string `json:"connection_id"`
+	BridgeURL    string `json:"bridge_url"`
+	Fingerprint  string `json:"fingerprint"`
+	DeviceID     string `json:"device_id"`
+	Token        string `json:"token"`
+	Workspace    string `json:"workspace"`
 }
