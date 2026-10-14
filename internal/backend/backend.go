@@ -9,8 +9,8 @@ import (
 	"net/url"
 	"strings"
 
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/transport"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/transport"
 )
 
 type Exec interface {

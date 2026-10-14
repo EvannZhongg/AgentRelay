@@ -2,9 +2,9 @@
 setlocal
 cd /d "%~dp0"
 
-if not exist "%~dp0AgentRelay.exe" (
-  echo [ERROR] AgentRelay.exe not found next to this launcher.
-  echo         Build it first:  go build -o AgentRelay.exe ./cmd/AgentRelay
+if not exist "%~dp0DevFreight.exe" (
+  echo [ERROR] DevFreight.exe not found next to this launcher.
+  echo         Build it first:  go build -o DevFreight.exe ./cmd/DevFreight
   echo.
   pause
   exit /b 1
@@ -22,7 +22,7 @@ echo  Paste the JSON below into the mcpServers section
 echo  of your agent configuration.
 echo.
 
-"%~dp0AgentRelay.exe" mcp config --controller "%CONTROLLER%"
+"%~dp0DevFreight.exe" mcp config --controller "%CONTROLLER%"
 set "CODE=%ERRORLEVEL%"
 echo.
 echo exit code %CODE%

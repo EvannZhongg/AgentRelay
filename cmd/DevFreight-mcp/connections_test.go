@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/testshell"
-	"AgentRelay/internal/testutil"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/testshell"
+	"DevFreight/internal/testutil"
 )
 
 func TestAgentDeviceListingOmitsConnectionConfiguration(t *testing.T) {

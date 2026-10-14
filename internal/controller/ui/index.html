@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AgentRelay</title>
+<title>DevFreight</title>
 <style>
 :root{
   --bg:#f4f5f7; --surface:#fff; --line:#e4e7eb; --line-2:#c8d0d8;
@@ -66,11 +66,11 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#8d97a2;box-sh
 </style>
 </head>
 <body>
-<header><h1>AgentRelay</h1><span class="grow"></span><button class="quiet" onclick="refresh(true)">刷新</button></header>
+<header><h1>DevFreight</h1><span class="grow"></span><button class="quiet" onclick="refresh(true)">刷新</button></header>
 <p id="message" role="status"></p>
 <main>
   <details><summary>跨网段 Worker 配对</summary>
-    <p class="hint">在被控端指定此主控的 HTTPS 地址，并核对以下证书指纹：运行 AgentRelay-worker setup --controller &lt;地址&gt; --fingerprint &lt;指纹&gt; --workspace &lt;目录&gt; --name &lt;别名&gt;，然后批准相同验证数字的请求。</p>
+    <p class="hint">在被控端指定此主控的 HTTPS 地址，并核对以下证书指纹：运行 DevFreight-worker setup --controller &lt;地址&gt; --fingerprint &lt;指纹&gt; --workspace &lt;目录&gt; --name &lt;别名&gt;，然后批准相同验证数字的请求。</p>
     <input id="fingerprint" readonly aria-label="主控证书指纹" style="width:100%;font-family:var(--mono)">
   </details>
   <section>
@@ -84,7 +84,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:#8d97a2;box-sh
           <div class="f"><label for="ssh-mode">工作区模式</label><select id="ssh-mode"><option value="remote">远端仓库</option><option value="local_sync">本地源码同步（需要连接支持同步）</option></select></div>
         </div>
         <div id="ssh-fields"></div>
-        <p class="hint">Windows 使用系统 PowerShell，macOS/Linux 使用原生 sh 和系统工具，无需 Python 或 AgentRelay 程序。工作区须已存在。主控使用 OpenSSH 密钥或 ssh-agent，主机公钥须预先加入 known_hosts。</p>
+        <p class="hint">Windows 使用系统 PowerShell，macOS/Linux 使用原生 sh 和系统工具，无需 Python 或 DevFreight 程序。工作区须已存在。主控使用 OpenSSH 密钥或 ssh-agent，主机公钥须预先加入 known_hosts。</p>
         <button class="primary" type="submit">创建设备 / 更换连接方式</button>
       </form>
     </details>
@@ -156,7 +156,7 @@ function renderDevices() {
   const el = $('#devices');
   $('#devices-count').textContent = devices.length ? String(devices.length) : '';
   if (!devices.length) {
-    el.innerHTML = '<li class="empty">暂无设备。新增设备 / 更换为 SSH，或在被控端运行 AgentRelay-worker setup 发起配对。</li>';
+    el.innerHTML = '<li class="empty">暂无设备。新增设备 / 更换为 SSH，或在被控端运行 DevFreight-worker setup 发起配对。</li>';
     return;
   }
   const sorted = [...devices].sort((a, b) => (a.name || '').localeCompare(b.name || '') || (a.id || '').localeCompare(b.id || ''));

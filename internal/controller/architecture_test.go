@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"AgentRelay/internal/backend"
-	"AgentRelay/internal/connection"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/state"
-	"AgentRelay/internal/transport"
+	"DevFreight/internal/backend"
+	"DevFreight/internal/connection"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/state"
+	"DevFreight/internal/transport"
 )
 
 type memoryAdapter struct {

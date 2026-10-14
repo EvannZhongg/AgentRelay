@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"AgentRelay/internal/state"
+	"DevFreight/internal/state"
 )
 
-func TestScanAppliesNestedGitIgnoreAndAgentRelayIgnore(t *testing.T) {
-	t.Setenv("AGENTRELAY_HOME", t.TempDir())
+func TestScanAppliesNestedGitIgnoreAndDevFreightIgnore(t *testing.T) {
+	t.Setenv("DEVFREIGHT_HOME", t.TempDir())
 	root := t.TempDir()
 	write := func(name, content string) {
 		t.Helper()
@@ -24,7 +24,7 @@ func TestScanAppliesNestedGitIgnoreAndAgentRelayIgnore(t *testing.T) {
 		}
 	}
 	write(".gitignore", "# comment\n*.tmp\n!keep.tmp\nbuild/\n")
-	write(".agentrelayignore", "*.log\ncustom.bin\n")
+	write(".devfreightignore", "*.log\ncustom.bin\n")
 	write("a.txt", "a")
 	write("# comment", "included")
 	write("a.tmp", "ignored")
@@ -45,7 +45,7 @@ func TestScanAppliesNestedGitIgnoreAndAgentRelayIgnore(t *testing.T) {
 	for _, entry := range result.Entries {
 		paths = append(paths, entry.Path)
 	}
-	want := []string{"# comment", ".agentrelayignore", ".gitignore", "a.txt", "keep.tmp", "nested/.gitignore", "nested/keep.txt"}
+	want := []string{"# comment", ".devfreightignore", ".gitignore", "a.txt", "keep.tmp", "nested/.gitignore", "nested/keep.txt"}
 	if !slices.Equal(paths, want) {
 		t.Fatalf("paths = %v, want %v", paths, want)
 	}
@@ -55,7 +55,7 @@ func TestScanAppliesNestedGitIgnoreAndAgentRelayIgnore(t *testing.T) {
 }
 
 func TestScanSkipsSymbolicLinks(t *testing.T) {
-	t.Setenv("AGENTRELAY_HOME", t.TempDir())
+	t.Setenv("DEVFREIGHT_HOME", t.TempDir())
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "outside.txt")
 	if err := os.WriteFile(target, []byte("outside"), 0600); err != nil {
@@ -76,17 +76,17 @@ func TestScanSkipsSymbolicLinks(t *testing.T) {
 	}
 }
 
-func TestScanWarnsWhenAgentRelayIgnoreIsASymbolicLink(t *testing.T) {
-	t.Setenv("AGENTRELAY_HOME", t.TempDir())
+func TestScanWarnsWhenDevFreightIgnoreIsASymbolicLink(t *testing.T) {
+	t.Setenv("DEVFREIGHT_HOME", t.TempDir())
 	root := t.TempDir()
 	target := filepath.Join(t.TempDir(), "ignore-rules")
 	if err := os.WriteFile(target, []byte("*.secret\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".agentrelayignore\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".devfreightignore\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, filepath.Join(root, ".agentrelayignore")); err != nil {
+	if err := os.Symlink(target, filepath.Join(root, ".devfreightignore")); err != nil {
 		t.Skipf("symbolic links are unavailable: %v", err)
 	}
 	result, err := Scan(Options{SourcePath: root, UseGitIgnore: true})
@@ -95,7 +95,7 @@ func TestScanWarnsWhenAgentRelayIgnoreIsASymbolicLink(t *testing.T) {
 	}
 	found := false
 	for _, warning := range result.Warnings {
-		if strings.Contains(warning, "skipped symbolic link .agentrelayignore") {
+		if strings.Contains(warning, "skipped symbolic link .devfreightignore") {
 			found = true
 			break
 		}
@@ -107,7 +107,7 @@ func TestScanWarnsWhenAgentRelayIgnoreIsASymbolicLink(t *testing.T) {
 
 func TestScanRecoversFromInvalidCache(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("AGENTRELAY_HOME", home)
+	t.Setenv("DEVFREIGHT_HOME", home)
 	if err := os.WriteFile(filepath.Join(home, "sync-cache.json"), []byte("not json"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestScanContinuesWhenCacheCannotBeSaved(t *testing.T) {
 	if err := os.WriteFile(homeFile, []byte("file"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("AGENTRELAY_HOME", homeFile)
+	t.Setenv("DEVFREIGHT_HOME", homeFile)
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("content"), 0600); err != nil {
 		t.Fatal(err)

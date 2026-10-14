@@ -1,7 +1,7 @@
 package workspace
 
 import (
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/protocol"
 	"path/filepath"
 	"testing"
 )

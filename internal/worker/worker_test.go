@@ -1,7 +1,7 @@
 package worker
 
 import (
-	"AgentRelay/internal/testshell"
+	"DevFreight/internal/testshell"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/protocol"
 )
 
 func TestWorkerExecSyncAndPathBoundary(t *testing.T) {
@@ -27,7 +27,7 @@ func TestWorkerExecSyncAndPathBoundary(t *testing.T) {
 	server := httptest.NewServer(s.Handler())
 	defer server.Close()
 
-	execBody, _ := json.Marshal(protocol.ExecRequest{Command: testshell.Native("Write-Output AgentRelay-ok", "printf AgentRelay-ok")})
+	execBody, _ := json.Marshal(protocol.ExecRequest{Command: testshell.Native("Write-Output DevFreight-ok", "printf DevFreight-ok")})
 	resp, err := http.Post(server.URL+"/v1/exec", "application/json", bytes.NewReader(execBody))
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestWorkerExecSyncAndPathBoundary(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		t.Fatal(err)
 	}
-	if result.ExitCode != 0 || !strings.Contains(result.Stdout, "AgentRelay-ok") {
+	if result.ExitCode != 0 || !strings.Contains(result.Stdout, "DevFreight-ok") {
 		t.Fatalf("unexpected exec result: %+v", result)
 	}
 	if err := os.MkdirAll(filepath.Join(root, "project"), 0755); err != nil {
@@ -153,7 +153,7 @@ func TestWorkerSessionLifecycle(t *testing.T) {
 	if session.ID == "" || session.Status != "running" {
 		t.Fatalf("session = %+v", session)
 	}
-	input := protocol.SessionInput{Input: testshell.Native("Write-Output AgentRelay-session-ok\r\n", "printf '%s\\n' AgentRelay-session-ok\n")}
+	input := protocol.SessionInput{Input: testshell.Native("Write-Output DevFreight-session-ok\r\n", "printf '%s\\n' DevFreight-session-ok\n")}
 	data, _ := json.Marshal(input)
 	resp, err := client.Post(server.URL+"/v1/sessions/"+session.ID+"/input", "application/json", strings.NewReader(string(data)))
 	if err != nil {
@@ -172,7 +172,7 @@ func TestWorkerSessionLifecycle(t *testing.T) {
 		var current protocol.Session
 		_ = json.NewDecoder(resp.Body).Decode(&current)
 		resp.Body.Close()
-		if strings.Contains(current.Stdout, "AgentRelay-session-ok") {
+		if strings.Contains(current.Stdout, "DevFreight-session-ok") {
 			found = true
 			break
 		}

@@ -1,7 +1,7 @@
 package controller
 
 import (
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/protocol"
 	"bytes"
 	"encoding/json"
 	"net/http"

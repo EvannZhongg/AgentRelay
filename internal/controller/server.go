@@ -1,10 +1,10 @@
 package controller
 
 import (
-	"AgentRelay/internal/connection"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/state"
-	"AgentRelay/internal/transport"
+	"DevFreight/internal/connection"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/state"
+	"DevFreight/internal/transport"
 	"context"
 	"crypto/tls"
 	"encoding/json"

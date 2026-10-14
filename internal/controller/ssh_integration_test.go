@@ -1,10 +1,10 @@
 package controller_test
 
 import (
-	"AgentRelay/internal/backend"
-	"AgentRelay/internal/controller"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/state"
+	"DevFreight/internal/backend"
+	"DevFreight/internal/controller"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/state"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -18,9 +18,9 @@ import (
 
 // Opt-in real OpenSSH test. Supply an isolated test workspace and key files.
 func TestSSHIntegration(t *testing.T) {
-	raw := os.Getenv("AGENTRELAY_TEST_SSH")
+	raw := os.Getenv("DEVFREIGHT_TEST_SSH")
 	if raw == "" {
-		t.Skip("set AGENTRELAY_TEST_SSH to DeviceCreate JSON for a real SSH target")
+		t.Skip("set DEVFREIGHT_TEST_SSH to DeviceCreate JSON for a real SSH target")
 	}
 	var in protocol.DeviceCreate
 	if err := json.Unmarshal([]byte(raw), &in); err != nil {
@@ -39,7 +39,7 @@ func TestSSHIntegration(t *testing.T) {
 		}
 		return posix
 	}
-	t.Setenv("AGENTRELAY_HOME", t.TempDir())
+	t.Setenv("DEVFREIGHT_HOME", t.TempDir())
 	s, err := controller.New(controller.Config{StatePath: state.Path("controller")})
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +140,7 @@ func TestSSHIntegration(t *testing.T) {
 	if err != nil || result.ExitCode == 0 {
 		t.Fatalf("revoked command's child is still running: %+v %v", result, err)
 	}
-	restarted, err := controller.New(controller.Config{StatePath: filepath.Join(os.Getenv("AGENTRELAY_HOME"), "controller.json")})
+	restarted, err := controller.New(controller.Config{StatePath: filepath.Join(os.Getenv("DEVFREIGHT_HOME"), "controller.json")})
 	if err != nil {
 		t.Fatal(err)
 	}

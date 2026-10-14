@@ -15,7 +15,7 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/protocol"
 	"github.com/ebitengine/purego"
 )
 
@@ -128,7 +128,7 @@ func (b *macBackend) Info() (protocol.DesktopInfo, error) {
 }
 
 func (b *macBackend) Capture(ctx context.Context, d protocol.Display) (image.Image, error) {
-	f, err := os.CreateTemp("", "agentrelay-capture-*.png")
+	f, err := os.CreateTemp("", "devfreight-capture-*.png")
 	if err != nil {
 		return nil, err
 	}

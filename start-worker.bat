@@ -2,16 +2,16 @@
 setlocal
 cd /d "%~dp0"
 
-if not exist "%~dp0AgentRelay-worker.exe" (
-  echo [ERROR] AgentRelay-worker.exe not found next to this launcher.
-  echo         Build it first:  go build -o AgentRelay-worker.exe ./cmd/AgentRelay-worker
+if not exist "%~dp0DevFreight-worker.exe" (
+  echo [ERROR] DevFreight-worker.exe not found next to this launcher.
+  echo         Build it first:  go build -o DevFreight-worker.exe ./cmd/DevFreight-worker
   echo.
   pause
   exit /b 1
 )
 
 echo ==========================================
-echo  AgentRelay worker
+echo  DevFreight worker
 echo ==========================================
 echo.
 echo  First run: discover a controller and wait for controller approval.
@@ -21,9 +21,9 @@ echo  Press Ctrl+C to stop.
 echo.
 
 if "%~1"=="" (
-  "%~dp0AgentRelay-worker.exe" serve
+  "%~dp0DevFreight-worker.exe" serve
 ) else (
-  "%~dp0AgentRelay-worker.exe" setup --workspace "%~1"
+  "%~dp0DevFreight-worker.exe" setup --workspace "%~1"
 )
 set "CODE=%ERRORLEVEL%"
 echo.

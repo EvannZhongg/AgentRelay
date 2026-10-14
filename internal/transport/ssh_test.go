@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/protocol"
 )
 
 func TestSSHRejectsUnsafeConfigurationBeforeLaunching(t *testing.T) {

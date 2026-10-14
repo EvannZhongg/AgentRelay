@@ -23,8 +23,8 @@ jobs:
       - name: Check lightweight Worker dependency boundary
         shell: bash
         run: |
-          go list -deps ./cmd/AgentRelay-worker > worker-deps.txt
-          if grep -E '^AgentRelay/internal/(controller|backend|connection|filesync)$' worker-deps.txt; then exit 1; fi
+          go list -deps ./cmd/DevFreight-worker > worker-deps.txt
+          if grep -E '^DevFreight/internal/(controller|backend|connection|filesync)$' worker-deps.txt; then exit 1; fi
   cross-build:
     runs-on: ubuntu-latest
     steps:

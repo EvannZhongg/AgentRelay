@@ -3,7 +3,7 @@
 package desktop
 
 import (
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/protocol"
 	"context"
 	"image"
 )

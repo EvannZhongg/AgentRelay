@@ -5,13 +5,13 @@ import (
 	"errors"
 	"flag"
 
-	"AgentRelay/internal/controller"
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/controller"
+	"DevFreight/internal/protocol"
 )
 
 func connectionCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: AgentRelay connection add-ssh|show|test|replace-ssh|replace-worker")
+		return errors.New("usage: DevFreight connection add-ssh|show|test|replace-ssh|replace-worker")
 	}
 	f := flag.NewFlagSet("connection", flag.ContinueOnError)
 	base := f.String("controller", controller.DefaultURL, "Controller URL")

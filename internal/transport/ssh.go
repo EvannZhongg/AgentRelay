@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/protocol"
 )
 
 type SSH struct{ Config protocol.SSHConfig }

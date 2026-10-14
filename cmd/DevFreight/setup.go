@@ -1,8 +1,8 @@
 package main
 
 import (
-	"AgentRelay/internal/controller"
-	"AgentRelay/internal/discovery"
+	"DevFreight/internal/controller"
+	"DevFreight/internal/discovery"
 	"bufio"
 	"context"
 	"errors"
@@ -17,13 +17,13 @@ import (
 
 func setupCommand(args []string) error {
 	if len(args) != 0 {
-		return errors.New("usage: AgentRelay setup")
+		return errors.New("usage: DevFreight setup")
 	}
 	return guiCommand(nil)
 }
 func controllerCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: AgentRelay controller serve")
+		return errors.New("usage: DevFreight controller serve")
 	}
 	f := flag.NewFlagSet("controller", flag.ContinueOnError)
 	listen := f.String("listen", ":8764", "controller listen address")
@@ -32,7 +32,7 @@ func controllerCommand(args []string) error {
 		return err
 	}
 	if args[0] != "serve" {
-		return errors.New("usage: AgentRelay controller serve")
+		return errors.New("usage: DevFreight controller serve")
 	}
 	s, err := controller.New(controller.Config{ListenAddr: *listen})
 	if err != nil {

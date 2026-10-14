@@ -11,9 +11,9 @@ import (
 	"os"
 	"strings"
 
-	"AgentRelay/internal/controller"
-	"AgentRelay/internal/filesync"
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/controller"
+	"DevFreight/internal/filesync"
+	"DevFreight/internal/protocol"
 )
 
 type rpcRequest struct {
@@ -39,7 +39,7 @@ func (e *rpcError) Error() string { return e.Message }
 
 const (
 	currentProtocolVersion = "2025-06-18"
-	serverName             = "AgentRelay"
+	serverName             = "DevFreight"
 	serverVersion          = "0.3.0"
 )
 

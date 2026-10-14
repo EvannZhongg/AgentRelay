@@ -24,7 +24,7 @@ try {
     $root = [IO.Path]::GetFullPath([string]$request.workspace)
     if (![IO.Directory]::Exists($root)) { throw 'authorized workspace must exist' }
     if ($request.operation -eq 'probe') {
-        [Console]::WriteLine("AgentRelaySSH1`nstatus`t200")
+        [Console]::WriteLine("DevFreightSSH1`nstatus`t200")
         Write-Field 'os' ($utf8.GetBytes('windows'))
         $architecture = [string]$env:PROCESSOR_ARCHITECTURE
         if ($env:PROCESSOR_ARCHITEW6432) { $architecture = $env:PROCESSOR_ARCHITEW6432 }
@@ -45,7 +45,7 @@ try {
                 $offset += $count
             }
         } finally { $stream.Dispose() }
-        [Console]::WriteLine("AgentRelaySSH1`nstatus`t200")
+        [Console]::WriteLine("DevFreightSSH1`nstatus`t200")
         Write-Field 'content' $data
         return
     }
@@ -134,12 +134,12 @@ public static class RelaySSHExecute {
     $info.RedirectStandardError = $true
     if ($request.exec.env) { foreach ($property in $request.exec.env.PSObject.Properties) { $info.EnvironmentVariables[$property.Name] = [string]$property.Value } }
     $result = [RelaySSHExecute]::Run($info, [int]$request.exec.timeout_ms, $command)
-    [Console]::WriteLine("AgentRelaySSH1`nstatus`t200`nexit_code`t" + $result.Code + "`ntimed_out`t" + [int]$result.TimedOut + "`ntruncated`t" + [int]$result.Truncated)
+    [Console]::WriteLine("DevFreightSSH1`nstatus`t200`nexit_code`t" + $result.Code + "`ntimed_out`t" + [int]$result.TimedOut + "`ntruncated`t" + [int]$result.Truncated)
     Write-Field 'stdout' $result.Out
     Write-Field 'stderr' $result.Err
 } catch {
     $status = 400
     if ($_.Exception -is [IO.FileNotFoundException] -or $_.Exception -is [IO.DirectoryNotFoundException]) { $status = 404 }
-    [Console]::WriteLine("AgentRelaySSH1`nstatus`t" + $status)
+    [Console]::WriteLine("DevFreightSSH1`nstatus`t" + $status)
     Write-Field 'error' ($utf8.GetBytes([string]$_))
 }

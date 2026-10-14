@@ -2,9 +2,9 @@
 setlocal
 cd /d "%~dp0"
 
-if not exist "%~dp0AgentRelay.exe" (
-  echo [ERROR] AgentRelay.exe not found next to this launcher.
-  echo         Build it first:  go build -o AgentRelay.exe ./cmd/AgentRelay
+if not exist "%~dp0DevFreight.exe" (
+  echo [ERROR] DevFreight.exe not found next to this launcher.
+  echo         Build it first:  go build -o DevFreight.exe ./cmd/DevFreight
   echo.
   pause
   exit /b 1
@@ -14,7 +14,7 @@ set "LISTEN=%~1"
 if "%LISTEN%"=="" set "LISTEN=:8764"
 
 echo ==========================================
-echo  AgentRelay controller
+echo  DevFreight controller
 echo ==========================================
 echo  listen : %LISTEN%
 echo.
@@ -24,7 +24,7 @@ echo.
 echo  Press Ctrl+C to stop.
 echo.
 
-"%~dp0AgentRelay.exe" controller serve --listen %LISTEN%
+"%~dp0DevFreight.exe" controller serve --listen %LISTEN%
 set "CODE=%ERRORLEVEL%"
 echo.
 echo controller exited with code %CODE%

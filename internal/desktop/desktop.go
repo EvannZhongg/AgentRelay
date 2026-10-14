@@ -13,7 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/protocol"
 )
 
 var ErrUnavailable = errors.New("desktop access unavailable; an interactive Windows or macOS session is required")

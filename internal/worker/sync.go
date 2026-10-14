@@ -20,8 +20,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"AgentRelay/internal/pathutil"
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/pathutil"
+	"DevFreight/internal/protocol"
 
 	gitignore "github.com/go-git/go-git/v5/plumbing/format/gitignore"
 )
@@ -68,7 +68,7 @@ type syncStore struct {
 }
 
 func newSyncStore(workspace string) *syncStore {
-	_ = os.RemoveAll(filepath.Join(workspace, ".agentrelay", "staging"))
+	_ = os.RemoveAll(filepath.Join(workspace, ".devfreight", "staging"))
 	return &syncStore{workspace: workspace, values: map[string]*syncState{}}
 }
 
@@ -87,7 +87,7 @@ func (s *Server) syncStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if reservedSyncRoot(req.Root) {
-		writeError(w, http.StatusBadRequest, errors.New("remote root uses the reserved .agentrelay directory"))
+		writeError(w, http.StatusBadRequest, errors.New("remote root uses the reserved .devfreight directory"))
 		return
 	}
 	root, err := resolveWithoutSymlinks(s.cfg.Workspace, req.Root)
@@ -101,7 +101,7 @@ func (s *Server) syncStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expires := time.Now().Add(syncTTL)
-	stage := filepath.Join(s.cfg.Workspace, ".agentrelay", "staging", id)
+	stage := filepath.Join(s.cfg.Workspace, ".devfreight", "staging", id)
 	if err := os.MkdirAll(stage, 0700); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -596,7 +596,7 @@ func removeSyncStages(sessions []*syncState) {
 
 func (s *syncStore) manifestPath(root string) string {
 	sum := sha256.Sum256([]byte(root))
-	return filepath.Join(s.workspace, ".agentrelay", "manifests", hex.EncodeToString(sum[:16])+".json")
+	return filepath.Join(s.workspace, ".devfreight", "manifests", hex.EncodeToString(sum[:16])+".json")
 }
 
 func (s *syncStore) loadManaged(root string) (managedManifest, error) {
@@ -705,7 +705,7 @@ func (s *Server) validateSyncRoot(session *syncState) error {
 
 func reservedSyncRoot(root string) bool {
 	clean := strings.Trim(strings.ReplaceAll(root, "\\", "/"), "/")
-	return clean == ".agentrelay" || strings.HasPrefix(clean, ".agentrelay/")
+	return clean == ".devfreight" || strings.HasPrefix(clean, ".devfreight/")
 }
 
 func isIgnored(path string, matcher gitignore.Matcher) bool {

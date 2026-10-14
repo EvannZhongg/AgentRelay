@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/transport"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/transport"
 )
 
 func TestSSHPlatformValidationIndependentOfController(t *testing.T) {
@@ -307,7 +307,7 @@ func TestSSHRejectsPathTraversalAndUnsupportedOperations(t *testing.T) {
 }
 
 func TestSSHRejectsMalformedNativeFrames(t *testing.T) {
-	for _, s := range []string{"banner\nAgentRelaySSH1\nstatus\t200\n", "AgentRelaySSH1\nstatus\t200\nstatus\t400\n", "AgentRelaySSH1\nstatus\t200\nstdout\tbad"} {
+	for _, s := range []string{"banner\nDevFreightSSH1\nstatus\t200\n", "DevFreightSSH1\nstatus\t200\nstatus\t400\n", "DevFreightSSH1\nstatus\t200\nstdout\tbad"} {
 		if _, err := decodeSSH(sshInvocation{operation: "exec"}, []byte(s), time.Second); err == nil {
 			t.Fatalf("accepted %q", s)
 		}

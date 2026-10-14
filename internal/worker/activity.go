@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/protocol"
 )
 
 // Private adapter endpoint, never routed through the device operation API.

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/state"
-	"AgentRelay/internal/transport"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/state"
+	"DevFreight/internal/transport"
 	"github.com/gorilla/websocket"
 )
 
@@ -243,8 +243,8 @@ func (s *Server) Connect(ctx context.Context, credentials protocol.Credentials) 
 	u.Path = "/v1/connect"
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer "+credentials.Token)
-	headers.Set("X-AgentRelay-Device", credentials.DeviceID)
-	headers.Set("X-AgentRelay-Connection", credentials.ConnectionID)
+	headers.Set("X-DevFreight-Device", credentials.DeviceID)
+	headers.Set("X-DevFreight-Connection", credentials.ConnectionID)
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, TLSClientConfig: transport.PinnedTLS(credentials.Fingerprint)}
 	conn, resp, err := dialer.DialContext(ctx, u.String(), headers)
 	if err != nil {

@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"AgentRelay/internal/pathutil"
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/pathutil"
+	"DevFreight/internal/protocol"
 )
 
 const sessionOutputLimit = outputLimit

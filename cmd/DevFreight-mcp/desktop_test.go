@@ -15,9 +15,9 @@ import (
 	"strings"
 	"testing"
 
-	"AgentRelay/internal/controller"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/testutil"
+	"DevFreight/internal/controller"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/testutil"
 )
 
 type testDesktop struct{ last protocol.DesktopInput }

@@ -1,4 +1,4 @@
-module AgentRelay
+module DevFreight
 
 go 1.25.0
 

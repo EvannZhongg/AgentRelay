@@ -6,9 +6,9 @@ import (
 	"flag"
 	"strings"
 
-	"AgentRelay/internal/controller"
-	"AgentRelay/internal/filesync"
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/controller"
+	"DevFreight/internal/filesync"
+	"DevFreight/internal/protocol"
 )
 
 type syncPatterns []string

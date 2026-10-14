@@ -1,6 +1,6 @@
 package controller
 
-import "AgentRelay/internal/protocol"
+import "DevFreight/internal/protocol"
 
 // AgentDeviceView is an allowlist, so future private connection fields cannot
 // accidentally enter MCP, CLI discovery or the device information operation.

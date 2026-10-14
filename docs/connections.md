@@ -12,13 +12,13 @@ A device owns identity and authorization. Every device must bind exactly one con
 
 ## SSH With A Remote Repository
 
-Controller uses OpenSSH, key/agent authentication, batch mode and strict known-host checking. Windows targets use their system PowerShell; macOS/Linux targets use native sh and system utilities. Neither requires Python or an AgentRelay binary. See [native SSH executors](ssh.md) for requirements, platform selection and lifecycle limits.
+Controller uses OpenSSH, key/agent authentication, batch mode and strict known-host checking. Windows targets use their system PowerShell; macOS/Linux targets use native sh and system utilities. Neither requires Python or an DevFreight binary. See [native SSH executors](ssh.md) for requirements, platform selection and lifecycle limits.
 
 ```text
-AgentRelay connection add-ssh --name linux-dev --workspace /home/dev/repo --host 192.168.1.20 --user dev
-AgentRelay connection show --device linux-dev
-AgentRelay connection test --device linux-dev
-AgentRelay exec --device linux-dev --dir /home/dev/repo/src "pwd"
+DevFreight connection add-ssh --name linux-dev --workspace /home/dev/repo --host 192.168.1.20 --user dev
+DevFreight connection show --device linux-dev
+DevFreight connection test --device linux-dev
+DevFreight exec --device linux-dev --dir /home/dev/repo/src "pwd"
 ```
 
 SSH defaults to remote mode: the repository stays on the target and no local project/sync step is required. Use explicit replacement to change an existing device to SSH; supply the replacement workspace and configuration. SSH edits reset connectivity; test again before execution.
@@ -26,14 +26,14 @@ SSH defaults to remote mode: the repository stays on the target and no local pro
 ## Worker Pairing
 
 ```text
-AgentRelay-worker setup --workspace <target-root>
-AgentRelay-worker serve
+DevFreight-worker setup --workspace <target-root>
+DevFreight-worker serve
 ```
 
 Discovery pins the Controller certificate. For another subnet, verify its fingerprint (printed by controller serve or shown in the GUI), then use:
 
 ```text
-AgentRelay-worker setup --controller https://<controller-host>:8764 --fingerprint <sha256> --workspace <target-root> --name build-machine
+DevFreight-worker setup --controller https://<controller-host>:8764 --fingerprint <sha256> --workspace <target-root> --name build-machine
 ```
 
 Approve the matching verification number to create a new device. To change an existing device to Worker, choose that device in the GUI and execute **更换连接方式**, or use `connection replace-worker` below. This consumes the pending pairing request, preserves the device ID/handle/alias, deletes the old connection and invalidates its credentials. The replacement root can differ from the previous root.
@@ -41,9 +41,9 @@ Approve the matching verification number to create a new device. To change an ex
 Worker defaults to local_sync. Use `--workspace-mode remote` at setup for an existing remote repository; Controller GUI can also change mode. Worker root changes require pairing again. An empty or target-relative directory permits execution immediately in either mode.
 
 ```text
-AgentRelay exec --device build-machine --dir existing-repo --dir-kind remote "<native command>"
-AgentRelay sync --device build-machine --source <absolute-controller-source>
-AgentRelay exec --device build-machine --dir <absolute-controller-source> "<native command>"
+DevFreight exec --device build-machine --dir existing-repo --dir-kind remote "<native command>"
+DevFreight sync --device build-machine --source <absolute-controller-source>
+DevFreight exec --device build-machine --dir <absolute-controller-source> "<native command>"
 ```
 
 The latter commands use local_sync. `working_dir_kind=auto` maps absolute Controller paths only in that mode; remote mode treats absolute paths as target paths under the root. Explicit remote disambiguates absolute target paths in local_sync. File reads/pulls always refer to target paths. Remote-mode connections do not advertise sync, preventing accidental repository replacement.
@@ -51,8 +51,8 @@ The latter commands use local_sync. `working_dir_kind=auto` maps absolute Contro
 ## Explicit Replacement And Failure
 
 ```text
-AgentRelay connection replace-ssh --device <alias-or-handle> --workspace /home/dev/repo --host 192.168.1.20 --user dev
-AgentRelay connection replace-worker --device <alias-or-handle> --pairing <pending-pairing-id>
+DevFreight connection replace-ssh --device <alias-or-handle> --workspace /home/dev/repo --host 192.168.1.20 --user dev
+DevFreight connection replace-worker --device <alias-or-handle> --pairing <pending-pairing-id>
 ```
 
 Replacement is permitted only when execution requests, background tasks, shell sessions and syncs have ended. Configuration edits use the same guard. While checking activity and committing state, the Controller rejects new device operations and concurrent management changes with 409. Worker activity is checked on the device, including activity surviving a Controller restart. An offline Worker must reconnect before its idle state can be verified. Cancelled task status alone does not permit replacement: the process must have finished.
@@ -88,4 +88,4 @@ Management device views contain one `connection` object and its `connection_id`.
 
 local_sync policies may include `mappings`, from absolute Controller source paths to target-relative roots. Remote mode rejects mappings. Configuration revisions reject stale operations/probes. Controller state requires schema **4**, with a strict device/connection bijection; Worker credentials retain schema **3** because their wire format is unchanged. Older Controller state is rejected without migration or compatibility layers; initialize fresh state and configure/pair again.
 
-For a real SSH test, set `AGENTRELAY_TEST_SSH` to the DeviceCreate JSON above with an isolated disposable root and run `go test ./internal/controller -run TestSSHIntegration -v`. The test creates/removes its own files there.
+For a real SSH test, set `DEVFREIGHT_TEST_SSH` to the DeviceCreate JSON above with an isolated disposable root and run `go test ./internal/controller -run TestSSHIntegration -v`. The test creates/removes its own files there.

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/state"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/state"
 	"strings"
 	"testing"
 )
@@ -15,7 +15,7 @@ func TestWorkerRejectsUnpinnedManualSetup(t *testing.T) {
 }
 
 func TestWorkerRejectsOldCredentialsWithoutMigration(t *testing.T) {
-	t.Setenv("AGENTRELAY_HOME", t.TempDir())
+	t.Setenv("DEVFREIGHT_HOME", t.TempDir())
 	if err := state.Save(state.Path("worker"), protocol.Credentials{Schema: 2, DeviceID: "old"}); err != nil {
 		t.Fatal(err)
 	}

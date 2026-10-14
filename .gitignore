@@ -1,7 +1,7 @@
 *.exe
 *.test
 /dist/
-AgentRelay.exe
-AgentRelay-mcp.exe
+DevFreight.exe
+DevFreight-mcp.exe
 /goal.md
 /.nosis/

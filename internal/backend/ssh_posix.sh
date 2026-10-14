@@ -1,7 +1,7 @@
 # Parsed inside relay_main by the controller. Uses only system shell utilities.
 relay_encode() { base64 | tr -d '\r\n'; }
 relay_failure() {
-    printf 'AgentRelaySSH1\nstatus\t%s\nerror\t' "$1"
+    printf 'DevFreightSSH1\nstatus\t%s\nerror\t' "$1"
     printf '%s' "$2" | relay_encode
     printf '\n'
     exit 0
@@ -22,7 +22,7 @@ probe)
     case "$relay_os" in Darwin) relay_os=darwin;; Linux) relay_os=linux;; *) relay_failure 501 'unsupported POSIX platform';; esac
     relay_arch=$(uname -m)
     case "$relay_arch" in x86_64) relay_arch=amd64;; aarch64|arm64) relay_arch=arm64;; esac
-    printf 'AgentRelaySSH1\nstatus\t200\nos\t'; printf '%s' "$relay_os" | relay_encode
+    printf 'DevFreightSSH1\nstatus\t200\nos\t'; printf '%s' "$relay_os" | relay_encode
     printf '\narchitecture\t'; printf '%s' "$relay_arch" | relay_encode; printf '\n'
     return
     ;;
@@ -34,7 +34,7 @@ read)
     [ -f "$relay_file" ] || relay_failure 404 'file does not exist or is not regular'
     relay_size=$(wc -c < "$relay_file") || relay_failure 400 'cannot read file'
     [ "$relay_size" -le 16777216 ] || relay_failure 400 'file read exceeds 16 MiB'
-    printf 'AgentRelaySSH1\nstatus\t200\ncontent\t'
+    printf 'DevFreightSSH1\nstatus\t200\ncontent\t'
     # Bound the stream even if the file grows after the size check.
     head -c 16777217 "$relay_file" | relay_encode
     printf '\n'
@@ -45,7 +45,7 @@ exec) ;;
 esac
 relay_cwd=$(cd -P "$relay_root/$relay_path" 2>/dev/null && pwd -P) || relay_failure 400 'working directory does not exist'
 relay_inside "$relay_cwd" || relay_failure 400 'working directory escapes authorized workspace'
-relay_temp=$(mktemp -d "${TMPDIR:-/tmp}/agentrelay-ssh.XXXXXXXX") || relay_failure 500 'cannot create execution staging directory'
+relay_temp=$(mktemp -d "${TMPDIR:-/tmp}/devfreight-ssh.XXXXXXXX") || relay_failure 500 'cannot create execution staging directory'
 relay_pid= relay_timer= relay_watch= relay_out_reader= relay_err_reader=
 # Freeze each running process before collecting its children, then terminate
 # the tree. Detached processes are outside the synchronous shell lifecycle.
@@ -102,6 +102,6 @@ relay_timed_out=0; [ ! -f "$relay_temp/timed_out" ] || relay_timed_out=1
 relay_truncated=0
 [ "$(wc -c < "$relay_temp/out")" -le 1048576 ] || relay_truncated=1
 [ "$(wc -c < "$relay_temp/err")" -le 1048576 ] || relay_truncated=1
-printf 'AgentRelaySSH1\nstatus\t200\nexit_code\t%s\ntimed_out\t%s\ntruncated\t%s\nstdout\t' "$relay_code" "$relay_timed_out" "$relay_truncated"
+printf 'DevFreightSSH1\nstatus\t200\nexit_code\t%s\ntimed_out\t%s\ntruncated\t%s\nstdout\t' "$relay_code" "$relay_timed_out" "$relay_truncated"
 head -c 1048576 "$relay_temp/out" | relay_encode
 printf '\nstderr\t'; head -c 1048576 "$relay_temp/err" | relay_encode; printf '\n'

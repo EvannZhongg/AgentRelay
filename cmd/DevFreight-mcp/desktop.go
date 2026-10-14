@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"AgentRelay/internal/controller"
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/controller"
+	"DevFreight/internal/protocol"
 )
 
 func desktopToolDefinitions() []map[string]any {

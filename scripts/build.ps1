@@ -12,12 +12,12 @@ try {
             $env:GOOS = $platform
             $env:GOARCH = $architecture
             $directory = Join-Path $OutputDirectory "$platform-$architecture"
-            foreach ($component in @("AgentRelay", "AgentRelay-mcp", "AgentRelay-worker")) {
+            foreach ($component in @("DevFreight", "DevFreight-mcp", "DevFreight-worker")) {
                 $name = $component
                 $flags = "-s -w"
                 if ($platform -eq "windows") {
                     $name += ".exe"
-                    if ($component -eq "AgentRelay-mcp") { $flags += " -H=windowsgui" }
+                    if ($component -eq "DevFreight-mcp") { $flags += " -H=windowsgui" }
                 }
                 & go build -trimpath -ldflags $flags -o (Join-Path $directory $name) "./cmd/$component"
                 if ($LASTEXITCODE -ne 0) { throw "Build failed: $platform/$architecture $component" }

@@ -1,10 +1,10 @@
 package controller_test
 
 import (
-	"AgentRelay/internal/filesync"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/testshell"
-	"AgentRelay/internal/testutil"
+	"DevFreight/internal/filesync"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/testshell"
+	"DevFreight/internal/testutil"
 	"context"
 	"encoding/base64"
 	"os"

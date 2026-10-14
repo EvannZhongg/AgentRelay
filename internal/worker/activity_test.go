@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/protocol"
 )
 
 func TestActivityUsesProcessCompletionAndSyncExpiry(t *testing.T) {

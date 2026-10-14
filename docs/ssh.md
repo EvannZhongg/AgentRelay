@@ -1,6 +1,6 @@
 # Native SSH Executors
 
-SSH works independently of the Controller OS. The Controller needs OpenSSH `ssh`; targets need an SSH server, their native shell and the system tools below. No Python, Node.js, Agent Runtime, Worker binary or persistent AgentRelay service is installed on SSH targets.
+SSH works independently of the Controller OS. The Controller needs OpenSSH `ssh`; targets need an SSH server, their native shell and the system tools below. No Python, Node.js, Agent Runtime, Worker binary or persistent DevFreight service is installed on SSH targets.
 
 | Target | Executor | Requirements |
 | --- | --- | --- |
@@ -15,12 +15,12 @@ This is **no additional language-runtime installation**, rather than a claim tha
 `ssh.platform` is `auto`, `windows` or `posix`. `auto` selects Windows for drive/UNC roots and POSIX for absolute POSIX roots. It never uses the Controller's OS. Specify the executor explicitly if the host exposes a different environment. A mismatched platform/root is rejected before OpenSSH launches. There is no failure-based Shell fallback or command replay.
 
 ```text
-AgentRelay connection add-ssh --name windows-dev --platform windows --workspace C:\src\repo --host 192.168.1.30 --user builder
-AgentRelay connection add-ssh --name mac-dev --platform posix --workspace /Users/builder/repo --host 192.168.1.31 --user builder
-AgentRelay connection add-ssh --name linux-dev --workspace /home/builder/repo --host 192.168.1.32 --user builder
-AgentRelay connection show --device windows-dev
-AgentRelay connection test --device windows-dev
-AgentRelay exec --device windows-dev --dir C:\src\repo "Get-ChildItem"
+DevFreight connection add-ssh --name windows-dev --platform windows --workspace C:\src\repo --host 192.168.1.30 --user builder
+DevFreight connection add-ssh --name mac-dev --platform posix --workspace /Users/builder/repo --host 192.168.1.31 --user builder
+DevFreight connection add-ssh --name linux-dev --workspace /home/builder/repo --host 192.168.1.32 --user builder
+DevFreight connection show --device windows-dev
+DevFreight connection test --device windows-dev
+DevFreight exec --device windows-dev --dir C:\src\repo "Get-ChildItem"
 ```
 
 GUI SSH configuration includes the same platform selector. SSH defaults to the `remote` workspace policy, so commands can use the existing target repository without local source or synchronization. Probe reports the actual OS, architecture and native shell. Before probing, shell identity is unknown. Capabilities remain Exec and Files; tasks, sessions, sync and desktop require a backend that advertises them.
@@ -29,7 +29,7 @@ Windows OpenSSH can configure its default command shell; see [Microsoft's config
 
 ## Execution And Transport
 
-`internal/transport.SSH.Run` carries opaque bytes over a strict OpenSSH channel. It does not interpret workspace policies, commands or request schemas. `internal/backend/ssh.go` validates the operation, chooses a native executor, serializes input, and translates bounded `AgentRelaySSH1` result frames into the existing operation contract. The Python executor is removed; no old wire-format compatibility path exists.
+`internal/transport.SSH.Run` carries opaque bytes over a strict OpenSSH channel. It does not interpret workspace policies, commands or request schemas. `internal/backend/ssh.go` validates the operation, chooses a native executor, serializes input, and translates bounded `DevFreightSSH1` result frames into the existing operation contract. The Python executor is removed; no old wire-format compatibility path exists.
 
 POSIX scripts use safely quoted request values and a parsed function so the channel-loss watcher cannot consume script input. Commands run from a temporary script file. Output collectors retain at most 1 MiB per stream while draining excess bytes, keeping staging storage bounded. Temporary execution files are removed on normal completion, timeout or trapped channel loss. SIGKILL or a host crash can leave a temporary directory. File reads retain at most 16 MiB.
 
@@ -43,4 +43,4 @@ File and working-directory paths remain below the authorized connection root. PO
 
 `go test ./internal/backend` runs the native executor for its host OS, checking Unicode/quoting, environment values, nonzero native exit codes, binary reads, truncation, long input, timeout and channel-loss child cleanup. On Windows it additionally launches the bootstrap through both default shell types. Native macOS tests run in the macOS CI job. Symlink tests run where OS privileges permit.
 
-For a real SSH end-to-end test, set `AGENTRELAY_TEST_SSH` to DeviceCreate JSON with an isolated target workspace and verified key/known_hosts files, then run `go test ./internal/controller -run TestSSHIntegration -v`. The test chooses commands from the **target** platform, independently of the test runner OS, and checks execution, files, authorization and cancellation.
+For a real SSH end-to-end test, set `DEVFREIGHT_TEST_SSH` to DeviceCreate JSON with an isolated target workspace and verified key/known_hosts files, then run `go test ./internal/controller -run TestSSHIntegration -v`. The test chooses commands from the **target** platform, independently of the test runner OS, and checks execution, files, authorization and cancellation.

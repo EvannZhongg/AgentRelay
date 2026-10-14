@@ -5,9 +5,9 @@ This document is for contributors. User setup and day-to-day commands belong in 
 ## Repository Layout
 
 ~~~text
-cmd/AgentRelay       controller CLI
-cmd/AgentRelay-mcp   stdio MCP adapter
-cmd/AgentRelay-worker standalone native target executable
+cmd/DevFreight       controller CLI
+cmd/DevFreight-mcp   stdio MCP adapter
+cmd/DevFreight-worker standalone native target executable
 internal/controller  HTTPS Controller, identity, authorization and routing
 internal/connection  transport adapters and capability binding
 internal/workspace   source authority and host-independent target path policy
@@ -31,9 +31,9 @@ Use Go 1.25 or the version declared by the module. From the repository root:
 go test ./...
 go test -race ./...
 go vet ./...
-go build -o AgentRelay.exe ./cmd/AgentRelay
-go build -ldflags "-H=windowsgui" -o AgentRelay-mcp.exe ./cmd/AgentRelay-mcp
-go build -o AgentRelay-worker.exe ./cmd/AgentRelay-worker
+go build -o DevFreight.exe ./cmd/DevFreight
+go build -ldflags "-H=windowsgui" -o DevFreight-mcp.exe ./cmd/DevFreight-mcp
+go build -o DevFreight-worker.exe ./cmd/DevFreight-worker
 ~~~
 
 Tests select native PowerShell/POSIX commands explicitly. Windows and Linux/WSL tests can run locally; macOS native execution and permissions require a Mac. CI runs tests on Windows, macOS and Linux. The MCP executable uses stdio; the Windows GUI linker flag prevents a console window. Use `scripts/build.ps1` or `sh scripts/build.sh` for all six OS/architecture combinations with CGO disabled.

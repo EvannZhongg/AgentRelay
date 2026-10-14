@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"time"
 
-	"AgentRelay/internal/controller"
-	"AgentRelay/internal/discovery"
+	"DevFreight/internal/controller"
+	"DevFreight/internal/discovery"
 )
 
 func guiCommand(args []string) error {
@@ -23,7 +23,7 @@ func guiCommand(args []string) error {
 		return err
 	}
 	if f.NArg() != 0 {
-		return errors.New("usage: AgentRelay gui [--listen :8764]")
+		return errors.New("usage: DevFreight gui [--listen :8764]")
 	}
 	s, err := controller.New(controller.Config{ListenAddr: *listen})
 	if err != nil {

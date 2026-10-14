@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"AgentRelay/internal/controller"
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/controller"
+	"DevFreight/internal/protocol"
 )
 
 func publicDevices(devices []protocol.Device) []map[string]any {
@@ -73,7 +73,7 @@ func client(args []string) (*controller.Client, context.Context, error) {
 }
 func deviceCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: AgentRelay device list|rename|authorize|revoke|remove")
+		return errors.New("usage: DevFreight device list|rename|authorize|revoke|remove")
 	}
 	switch args[0] {
 	case "list":
@@ -130,7 +130,7 @@ func execCommand(args []string) error {
 		return err
 	}
 	if *id == "" || f.NArg() == 0 {
-		return errors.New("usage: AgentRelay exec --device <id> [--dir <path>] <command>")
+		return errors.New("usage: DevFreight exec --device <id> [--dir <path>] <command>")
 	}
 	result, err := controller.NewClient(*base).Exec(context.Background(), *id, protocol.ExecRequest{Command: strings.Join(f.Args(), " "), WorkingDir: *dir, WorkingDirKind: *dirKind, TimeoutMS: *timeout, Env: env})
 	if err != nil {
@@ -140,7 +140,7 @@ func execCommand(args []string) error {
 }
 func taskCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: AgentRelay task start|list|get|retrieve|cancel")
+		return errors.New("usage: DevFreight task start|list|get|retrieve|cancel")
 	}
 	f := flag.NewFlagSet("task", flag.ContinueOnError)
 	base := f.String("controller", controller.DefaultURL, "controller URL")
@@ -210,12 +210,12 @@ type mcpConfig struct {
 
 func mcpCommand(args []string) error {
 	if len(args) == 0 || args[0] != "config" {
-		return errors.New("usage: AgentRelay mcp config [--controller <url>] [--command <path>] [--name <server-name>]")
+		return errors.New("usage: DevFreight mcp config [--controller <url>] [--command <path>] [--name <server-name>]")
 	}
 	f := flag.NewFlagSet("mcp config", flag.ContinueOnError)
 	base := f.String("controller", controller.DefaultURL, "Controller URL")
 	command := f.String("command", defaultMCPCommand(), "MCP server executable")
-	name := f.String("name", "agent-relay", "MCP server name")
+	name := f.String("name", "devfreight", "MCP server name")
 	if err := f.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -227,22 +227,22 @@ func mcpCommand(args []string) error {
 }
 
 func defaultMCPCommand() string {
-	if configured := strings.TrimSpace(os.Getenv("AGENTRELAY_MCP_COMMAND")); configured != "" {
+	if configured := strings.TrimSpace(os.Getenv("DEVFREIGHT_MCP_COMMAND")); configured != "" {
 		return configured
 	}
 	executable, err := os.Executable()
 	if err != nil {
-		return "AgentRelay-mcp"
+		return "DevFreight-mcp"
 	}
 	extension := filepath.Ext(executable)
 	name := strings.TrimSuffix(filepath.Base(executable), extension)
-	if strings.EqualFold(name, "AgentRelay") {
-		candidate := filepath.Join(filepath.Dir(executable), "AgentRelay-mcp"+extension)
+	if strings.EqualFold(name, "DevFreight") {
+		candidate := filepath.Join(filepath.Dir(executable), "DevFreight-mcp"+extension)
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
 	}
-	return "AgentRelay-mcp"
+	return "DevFreight-mcp"
 }
 func printJSON(v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
@@ -252,6 +252,6 @@ func printJSON(v any) error {
 	return err
 }
 func usage() {
-	fmt.Println("Connection management: AgentRelay connection add-ssh|show|test|replace-ssh|replace-worker")
-	fmt.Println("AgentRelay\n\nUsage:\n  AgentRelay setup\n  AgentRelay controller serve\n  AgentRelay gui\n  AgentRelay device list|rename|authorize|revoke|remove\n  AgentRelay exec --device <alias|handle> [--dir <local-project-or-remote-path>] <command>\n  AgentRelay task start|list|get|retrieve|cancel --device <alias|handle> [--id <task-id>]\n  AgentRelay sync --device <alias|handle> --source <dir> [--mode update|mirror] [--dry-run]\n  AgentRelay pull --device <alias|handle> [--out <local-dir>] <remote-path>...\n  AgentRelay session create|list|get|send|close --device <alias|handle> [--id <session-id>]\n  AgentRelay desktop info|capture|input --device <alias|handle> [--json <object>]\n  AgentRelay mcp config")
+	fmt.Println("Connection management: DevFreight connection add-ssh|show|test|replace-ssh|replace-worker")
+	fmt.Println("DevFreight\n\nUsage:\n  DevFreight setup\n  DevFreight controller serve\n  DevFreight gui\n  DevFreight device list|rename|authorize|revoke|remove\n  DevFreight exec --device <alias|handle> [--dir <local-project-or-remote-path>] <command>\n  DevFreight task start|list|get|retrieve|cancel --device <alias|handle> [--id <task-id>]\n  DevFreight sync --device <alias|handle> --source <dir> [--mode update|mirror] [--dry-run]\n  DevFreight pull --device <alias|handle> [--out <local-dir>] <remote-path>...\n  DevFreight session create|list|get|send|close --device <alias|handle> [--id <session-id>]\n  DevFreight desktop info|capture|input --device <alias|handle> [--json <object>]\n  DevFreight mcp config")
 }

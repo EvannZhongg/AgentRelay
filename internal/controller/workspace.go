@@ -1,8 +1,8 @@
 package controller
 
 import (
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/workspace"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/workspace"
 	"encoding/json"
 	"errors"
 )

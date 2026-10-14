@@ -1,7 +1,7 @@
 package controller
 
 import (
-	"AgentRelay/internal/transport"
+	"DevFreight/internal/transport"
 	"errors"
 	"net/http"
 	"strings"

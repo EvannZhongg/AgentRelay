@@ -1,8 +1,8 @@
 package controller
 
 import (
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/transport"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/transport"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -172,8 +172,8 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, errors.New("invalid worker connection"))
 		return
 	}
-	id := r.Header.Get("X-AgentRelay-Device")
-	connectionID := r.Header.Get("X-AgentRelay-Connection")
+	id := r.Header.Get("X-DevFreight-Device")
+	connectionID := r.Header.Get("X-DevFreight-Connection")
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	s.mu.Lock()
 	rec, ok := s.store.Devices[id]

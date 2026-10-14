@@ -1,10 +1,10 @@
 package controller
 
 import (
-	"AgentRelay/internal/backend"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/transport"
-	"AgentRelay/internal/workspace"
+	"DevFreight/internal/backend"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/transport"
+	"DevFreight/internal/workspace"
 	"context"
 	"encoding/json"
 	"errors"

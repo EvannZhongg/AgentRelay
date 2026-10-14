@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"AgentRelay/internal/controller"
-	"AgentRelay/internal/desktop"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/state"
-	"AgentRelay/internal/transport"
-	"AgentRelay/internal/worker"
+	"DevFreight/internal/controller"
+	"DevFreight/internal/desktop"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/state"
+	"DevFreight/internal/transport"
+	"DevFreight/internal/worker"
 )
 
 type Relay struct {
@@ -34,7 +34,7 @@ func NewWithDesktop(t *testing.T, root string, backend desktop.Backend) *Relay {
 	if root == "" {
 		root = t.TempDir()
 	}
-	t.Setenv("AGENTRELAY_HOME", t.TempDir())
+	t.Setenv("DEVFREIGHT_HOME", t.TempDir())
 	statePath := state.Path("controller")
 	b, err := controller.New(controller.Config{StatePath: statePath})
 	if err != nil {

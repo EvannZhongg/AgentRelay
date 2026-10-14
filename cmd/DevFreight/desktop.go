@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"AgentRelay/internal/controller"
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/controller"
+	"DevFreight/internal/protocol"
 )
 
 func desktopCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: AgentRelay desktop info|capture|input --device <id> [--json <object>]")
+		return errors.New("usage: DevFreight desktop info|capture|input --device <id> [--json <object>]")
 	}
 	f := flag.NewFlagSet("desktop", flag.ContinueOnError)
 	base := f.String("controller", controller.DefaultURL, "controller URL")

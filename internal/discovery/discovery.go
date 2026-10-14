@@ -10,7 +10,7 @@ import (
 )
 
 const Port = 8763
-const query = "AgentRelay discover v1"
+const query = "DevFreight discover v1"
 
 type Controller struct {
 	Name        string `json:"name"`

@@ -1,11 +1,11 @@
 package controller_test
 
 import (
-	"AgentRelay/internal/controller"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/testshell"
-	"AgentRelay/internal/testutil"
-	"AgentRelay/internal/worker"
+	"DevFreight/internal/controller"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/testshell"
+	"DevFreight/internal/testutil"
+	"DevFreight/internal/worker"
 	"context"
 	"errors"
 	"net/http/httptest"

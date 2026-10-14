@@ -1,4 +1,4 @@
-// AgentRelay-worker is the standalone target executable. It imports no
+// DevFreight-worker is the standalone target executable. It imports no
 // Controller, MCP server, SSH executor, local source scanner or agent runtime.
 package main
 

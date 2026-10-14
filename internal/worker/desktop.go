@@ -6,8 +6,8 @@ import (
 	"io"
 	"net/http"
 
-	"AgentRelay/internal/desktop"
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/desktop"
+	"DevFreight/internal/protocol"
 )
 
 func desktopJSON(r *http.Request, out any) error {

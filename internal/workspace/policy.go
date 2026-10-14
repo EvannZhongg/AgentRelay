@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/protocol"
 )
 
 func Relative(value string) bool {

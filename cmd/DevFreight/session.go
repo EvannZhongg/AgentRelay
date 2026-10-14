@@ -10,8 +10,8 @@ import (
 	"os"
 	"strings"
 
-	"AgentRelay/internal/controller"
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/controller"
+	"DevFreight/internal/protocol"
 )
 
 type environmentFlags map[string]string
@@ -31,7 +31,7 @@ func (e *environmentFlags) Set(value string) error {
 
 func sessionCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: AgentRelay session create|list|get|send|close")
+		return errors.New("usage: DevFreight session create|list|get|send|close")
 	}
 	f := flag.NewFlagSet("session", flag.ContinueOnError)
 	base := f.String("controller", controller.DefaultURL, "controller URL")

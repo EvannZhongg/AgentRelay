@@ -8,9 +8,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"AgentRelay/internal/controller"
-	"AgentRelay/internal/pathutil"
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/controller"
+	"DevFreight/internal/pathutil"
+	"DevFreight/internal/protocol"
 )
 
 func pullCommand(args []string) error {

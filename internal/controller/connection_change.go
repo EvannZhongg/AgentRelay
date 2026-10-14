@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"time"
 
-	"AgentRelay/internal/backend"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/transport"
+	"DevFreight/internal/backend"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/transport"
 )
 
 // Reserve the device before probing persistent remote activity. New operations

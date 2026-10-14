@@ -12,8 +12,8 @@ Desktop access follows the existing request path: `MCP/CLI -> Controller HTTPS -
 | `internal/desktop/native_darwin.go` | CoreGraphics metadata/input and system `screencapture` |
 | `internal/desktop/unsupported.go` | Explicit unsupported-platform response |
 | `internal/controller/desktop.go` | PNG validation, original artifact storage and preview scaling |
-| `cmd/AgentRelay-mcp/desktop.go` | MCP tool schemas and image content |
-| `cmd/AgentRelay/desktop.go` | CLI commands |
+| `cmd/DevFreight-mcp/desktop.go` | MCP tool schemas and image content |
+| `cmd/DevFreight/desktop.go` | CLI commands |
 
 The platform backend implements `Info`, `Capture` and `Input` without depending on MCP, Controller or WebSocket packages. The implementation does not depend on RobotGo and builds without CGO.
 
@@ -37,7 +37,7 @@ The Worker encodes the full PNG and returns it through the existing RPC. The Con
   "coordinate_unit": "physical_pixels",
   "display": {"id": 0, "pixel_width": 1920, "pixel_height": 1080},
   "artifact": {
-    "path": "C:\\Users\\user\\AppData\\Roaming\\AgentRelay\\artifacts\\captures\\capture-123.png",
+    "path": "C:\\Users\\user\\AppData\\Roaming\\DevFreight\\artifacts\\captures\\capture-123.png",
     "width": 1920,
     "height": 1080,
     "bytes": 133917,

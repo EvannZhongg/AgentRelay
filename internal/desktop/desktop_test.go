@@ -9,7 +9,7 @@ import (
 	"image/png"
 	"testing"
 
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/protocol"
 )
 
 type fakeBackend struct {

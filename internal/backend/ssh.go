@@ -1,9 +1,9 @@
 package backend
 
 import (
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/transport"
-	"AgentRelay/internal/workspace"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/transport"
+	"DevFreight/internal/workspace"
 	"context"
 	_ "embed"
 	"encoding/base64"
@@ -156,7 +156,7 @@ func prepareSSH(c protocol.SSHConfig, root string, r transport.Request) (sshInvo
 func decodeSSH(inv sshInvocation, data []byte, duration time.Duration) (transport.Response, error) {
 	// Only remove final record terminators: empty base64 values end in a tab.
 	lines := strings.Split(strings.TrimRight(string(data), "\r\n"), "\n")
-	if len(lines) < 2 || strings.TrimSuffix(lines[0], "\r") != "AgentRelaySSH1" {
+	if len(lines) < 2 || strings.TrimSuffix(lines[0], "\r") != "DevFreightSSH1" {
 		return transport.Response{}, errors.New("invalid native SSH executor response")
 	}
 	fields := map[string]string{}

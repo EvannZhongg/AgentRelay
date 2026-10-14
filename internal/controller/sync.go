@@ -1,8 +1,8 @@
 package controller
 
 import (
-	"AgentRelay/internal/filesync"
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/filesync"
+	"DevFreight/internal/protocol"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"

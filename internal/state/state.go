@@ -8,10 +8,10 @@ import (
 )
 
 func Path(name string) string {
-	root := os.Getenv("AGENTRELAY_HOME")
+	root := os.Getenv("DEVFREIGHT_HOME")
 	if root == "" {
 		root, _ = os.UserConfigDir()
-		root = filepath.Join(root, "AgentRelay")
+		root = filepath.Join(root, "DevFreight")
 	}
 	return filepath.Join(root, name+".json")
 }
@@ -35,7 +35,7 @@ func Save(path string, value any) error {
 	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".agentrelay-*")
+	f, err := os.CreateTemp(filepath.Dir(path), ".devfreight-*")
 	if err != nil {
 		return err
 	}

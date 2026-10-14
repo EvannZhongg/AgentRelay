@@ -7,9 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 
-	"AgentRelay/internal/backend"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/transport"
+	"DevFreight/internal/backend"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/transport"
 )
 
 type Adapter interface {

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"AgentRelay/internal/testshell"
+	"DevFreight/internal/testshell"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"AgentRelay/internal/controller"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/testutil"
+	"DevFreight/internal/controller"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/testutil"
 )
 
 func TestMCPInitializeNegotiatesSupportedVersion(t *testing.T) {

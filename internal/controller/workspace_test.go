@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/protocol"
 )
 
 func TestResolveWorkingDirRejectsNonObjectBodies(t *testing.T) {

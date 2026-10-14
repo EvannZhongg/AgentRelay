@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"AgentRelay/internal/transport"
+	"DevFreight/internal/transport"
 )
 
 func TestPairRequiresPinnedControllerFingerprint(t *testing.T) {

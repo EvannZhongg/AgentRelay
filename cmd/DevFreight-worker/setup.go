@@ -1,10 +1,10 @@
 package main
 
 import (
-	"AgentRelay/internal/discovery"
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/state"
-	"AgentRelay/internal/worker"
+	"DevFreight/internal/discovery"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/state"
+	"DevFreight/internal/worker"
 	"bufio"
 	"context"
 	"errors"
@@ -35,7 +35,7 @@ func prompt(input *bufio.Reader, label, fallback string) (string, error) {
 }
 func workerCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: AgentRelay-worker setup|serve")
+		return errors.New("usage: DevFreight-worker setup|serve")
 	}
 	f := flag.NewFlagSet("worker", flag.ContinueOnError)
 	workspace := f.String("workspace", "", "workspace for first setup")
@@ -56,7 +56,7 @@ func workerCommand(args []string) error {
 		return setupWorker(bufio.NewReader(os.Stdin), *workspace, *mode)
 	}
 	if args[0] != "serve" {
-		return errors.New("usage: AgentRelay-worker setup|serve")
+		return errors.New("usage: DevFreight-worker setup|serve")
 	}
 	if *workspace != "" || *base != "" || *fingerprint != "" || *name != "" {
 		return errors.New("configure controller and workspace with worker setup; serve uses saved pairing")
@@ -104,7 +104,7 @@ func setupWorker(input *bufio.Reader, workspace, mode string) error {
 		if err != nil {
 			return err
 		}
-		workspace, err = prompt(input, "Workspace folder", filepath.Join(home, "AgentRelay", "workspace"))
+		workspace, err = prompt(input, "Workspace folder", filepath.Join(home, "DevFreight", "workspace"))
 		if err != nil {
 			return err
 		}

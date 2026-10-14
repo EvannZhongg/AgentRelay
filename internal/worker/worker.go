@@ -17,9 +17,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"AgentRelay/internal/desktop"
-	"AgentRelay/internal/pathutil"
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/desktop"
+	"DevFreight/internal/pathutil"
+	"DevFreight/internal/protocol"
 )
 
 type Config struct {

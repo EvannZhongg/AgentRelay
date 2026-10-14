@@ -13,8 +13,8 @@ import (
 	"strings"
 	"sync"
 
-	"AgentRelay/internal/protocol"
-	"AgentRelay/internal/state"
+	"DevFreight/internal/protocol"
+	"DevFreight/internal/state"
 
 	gitignore "github.com/go-git/go-git/v5/plumbing/format/gitignore"
 )
@@ -185,7 +185,7 @@ func loadPatterns(root string, options Options) ([]gitignore.Pattern, []protocol
 			return nil, nil, err
 		}
 	}
-	path := filepath.Join(root, ".agentrelayignore")
+	path := filepath.Join(root, ".devfreightignore")
 	{
 		info, statErr := os.Lstat(path)
 		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
@@ -227,7 +227,7 @@ func parsePatternFile(path string, domain []string) ([]gitignore.Pattern, []prot
 
 func hardIgnored(parts []string) bool {
 	for _, part := range parts {
-		if part == ".git" || part == ".agentrelay" {
+		if part == ".git" || part == ".devfreight" {
 			return true
 		}
 	}

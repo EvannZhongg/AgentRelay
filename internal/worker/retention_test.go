@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"AgentRelay/internal/protocol"
+	"DevFreight/internal/protocol"
 )
 
 func TestLimitedOutputThroughCopy(t *testing.T) {
